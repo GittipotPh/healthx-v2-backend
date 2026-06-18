@@ -1,0 +1,2 @@
+"admin_id","title","name","lastname","email","tel","hash_password","status","updated_at","created_at"
+"ADMIN-01","Mr.","Master","Admin-01","admin-01@gmail.com","0000000000","5298dc065e653baffedf183b9247ceca","ACTIVE","2023-09-03 10:10:54.877","2023-09-03 10:10:54.877"

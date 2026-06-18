@@ -1,0 +1,13 @@
+# Skip the pre-run dependency status check. It otherwise fails because the
+# optional native build scripts below are not auto-approved; none are required
+# at runtime (Prisma 7 uses the @prisma/adapter-pg JS driver, not the engine).
+verifyDepsBeforeRun: false
+
+allowBuilds:
+  '@prisma/engines': false
+  '@scarf/scarf': false
+  argon2: false
+  esbuild: false
+  msgpackr-extract: false
+  prisma: false
+  unrs-resolver: false

@@ -1,0 +1,2334 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "darwin-arm64"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model admin {
+  admin_id      String        @id @db.VarChar(50)
+  title         String        @db.VarChar(50)
+  name          String        @db.VarChar(100)
+  lastname      String        @db.VarChar(100)
+  email         String        @db.VarChar(100)
+  tel           String        @db.VarChar(20)
+  hash_password String        @db.VarChar(255)
+  status        record_status
+  updated_at    DateTime      @db.Timestamp(6)
+  created_at    DateTime      @db.Timestamp(6)
+}
+
+model customer_wallet {
+  trans_id               String                  @db.VarChar(50)
+  branch_id              String                  @db.VarChar(50)
+  clinic_id              String                  @db.VarChar(50)
+  customer_id            String                  @db.VarChar(50)
+  date                   DateTime                @db.Timestamp(6)
+  payment_method_id      String                  @db.VarChar(50)
+  amount                 Decimal                 @db.Decimal(10, 2)
+  bonus                  Decimal                 @db.Decimal(10, 2)
+  seller_id              String                  @db.VarChar(50)
+  cashier_id             String                  @db.VarChar(50)
+  remark                 String?
+  evidence               String
+  status                 record_status
+  updated_at             DateTime                @db.Timestamp(6)
+  created_at             DateTime                @db.Timestamp(6)
+  created_by             String?                 @db.VarChar(50)
+  branch                 branch                  @relation(fields: [branch_id], references: [branch_id])
+  cashier_detail         user                    @relation("cashier_detail", fields: [cashier_id], references: [user_id])
+  created_by_user        user?                   @relation("created_by_user", fields: [created_by], references: [user_id])
+  customer               customer                @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  payment_method         clinic_payment_method   @relation(fields: [payment_method_id], references: [clinic_payment_method_id])
+  seller_detail          user                    @relation("seller_detail_user", fields: [seller_id], references: [user_id])
+  sale_wallet_commission sale_wallet_commission?
+
+  @@id([trans_id, branch_id])
+  @@index([customer_id, clinic_id])
+  @@index([payment_method_id])
+  @@index([branch_id])
+  @@index([seller_id])
+}
+
+model wallet_log {
+  wallet_log_id String      @id @db.VarChar(50)
+  branch_id     String      @db.VarChar(50)
+  clinic_id     String      @db.VarChar(50)
+  reference_id  String?     @db.VarChar(50)
+  customer_id   String      @db.VarChar(50)
+  in            Decimal     @db.Decimal(10, 2)
+  out           Decimal     @db.Decimal(10, 2)
+  type          wallet_type @default(NORMAL)
+  updated_at    DateTime    @db.Timestamp(6)
+  created_at    DateTime    @db.Timestamp(6)
+  customer      customer    @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+
+  @@index([reference_id, branch_id])
+  @@index([customer_id, clinic_id])
+}
+
+model appointment {
+  appointment_id        String                  @id @db.VarChar(50)
+  branch_id             String                  @db.VarChar(50)
+  clinic_id             String                  @db.VarChar(50)
+  customer_id           String                  @db.VarChar(50)
+  user_create           String                  @db.VarChar(50)
+  room                  String?                 @db.VarChar(50)
+  date_appointment      String                  @db.VarChar(50)
+  time_arrive           String                  @db.VarChar(20)
+  start_time            String                  @db.VarChar(20)
+  end_time              String                  @db.VarChar(20)
+  channel               String?                 @db.VarChar(120)
+  is_consult            Boolean
+  apply_anesthetic      Boolean
+  appointment_detail    String?
+  status_appointment    statusAppointment
+  updated_at            DateTime                @db.Timestamp(6)
+  created_at            DateTime                @db.Timestamp(6)
+  opd_id                String?
+  branch                branch                  @relation(fields: [branch_id], references: [branch_id])
+  customer              customer                @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  opd                   opd?                    @relation(fields: [opd_id, branch_id], references: [opd_id, branch_id])
+  examination_room      examination_room?       @relation(fields: [room], references: [room_id])
+  operation_appointment operation_appointment[]
+  user_appointment      user_appointment[]
+}
+
+model user_appointment {
+  appointment_id String        @db.VarChar(50)
+  user_id        String        @db.VarChar(50)
+  operator_type  operator_type @default(OPERATOR)
+  appointment    appointment   @relation(fields: [appointment_id], references: [appointment_id])
+  user           user          @relation(fields: [user_id], references: [user_id])
+
+  @@id([appointment_id, user_id, operator_type])
+}
+
+model operation_appointment {
+  appointment_id String         @db.VarChar(50)
+  product_id     String         @db.VarChar(50)
+  appointment    appointment    @relation(fields: [appointment_id], references: [appointment_id])
+  operation_item operation_item @relation(fields: [product_id], references: [op_id])
+
+  @@id([appointment_id, product_id])
+}
+
+model appointment_reminder {
+  reminder_id     String       @id @db.VarChar(50)
+  branch_id       String       @db.VarChar(50)
+  clinic_id       String       @db.VarChar(50)
+  customer_id     String       @db.VarChar(50)
+  user_create     String       @db.VarChar(50)
+  date_reminder   String       @db.VarChar(50)
+  reminder_detail String?
+  updated_at      DateTime     @db.Timestamp(6)
+  created_at      DateTime     @db.Timestamp(6)
+  text_repeat     String?
+  status_reminder statusRemind
+  opd_id          String?
+  reference_id    String?      @db.VarChar(50)
+  item_id         String?
+  branch          branch       @relation(fields: [branch_id], references: [branch_id])
+  customer        customer     @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  opd             opd?         @relation(fields: [opd_id, branch_id], references: [opd_id, branch_id])
+  user            user         @relation(fields: [user_create], references: [user_id])
+}
+
+model branch {
+  branch_id                    String                         @id @db.VarChar(50)
+  clinic_id                    String                         @db.VarChar(50)
+  branch_logo                  String
+  document_logo                String?
+  branch_name                  String                         @db.VarChar(250)
+  fax                          String?                        @db.VarChar(20)
+  tel                          String?                        @db.VarChar(20)
+  license_no                   String                         @db.VarChar(50)
+  tax_id                       String?                        @db.VarChar(50)
+  email                        String                         @db.VarChar(100)
+  line_id                      String                         @db.VarChar(100)
+  address                      String                         @db.VarChar(250)
+  sub_district                 String                         @db.VarChar(100)
+  district                     String                         @db.VarChar(100)
+  province                     String                         @db.VarChar(100)
+  postcode                     String                         @db.VarChar(5)
+  status                       record_status
+  round_decimal                Boolean
+  sales_tax                    vat_type
+  purchase_tax                 vat_type
+  condition_wallet             condition_wallet_enum
+  percent_commission           Decimal                        @db.Decimal(5, 2)
+  document_form_id             String                         @db.VarChar(50)
+  type_branch                  type_branch                    @default(NORMAL)
+  updated_at                   DateTime                       @db.Timestamp(6)
+  created_at                   DateTime                       @db.Timestamp(6)
+  branch_no                    String                         @db.VarChar(10)
+  is_upload_image_course       Boolean                        @default(false)
+  appointment                  appointment[]
+  appointment_reminder         appointment_reminder[]
+  clinic                       clinic                         @relation(fields: [clinic_id], references: [clinic_id])
+  document_form                document_form                  @relation(fields: [document_form_id], references: [form_id])
+  bundle_set                   bundle_set[]
+  clinic_payment_method        clinic_payment_method[]
+  course                       course[]
+  customer                     customer[]
+  customer_attendant           customer_attendant[]
+  customer_registration        customer_registration[]
+  customer_wallet              customer_wallet[]
+  distributor                  distributor[]
+  document_format              document_format[]
+  examination_room             examination_room[]
+  opd                          opd[]
+  operation_item               operation_item[]
+  prescription                 prescription[]
+  product                      product[]
+  sale_order                   sale_order[]
+  sale_target                  sale_target[]
+  service_usage                service_usage[]
+  service_usage_expiration     service_usage_expiration[]
+  service_usage_request_cancel service_usage_request_cancel[]
+  transfer_order               transfer_order[]
+  user_branch                  user_branch[]
+  user_permission              user_permission[]
+  work_schedule                work_schedule[]
+
+  @@index([branch_id, clinic_id])
+}
+
+model bundle_set {
+  bundle_set_id                   String                            @id @db.VarChar(50)
+  bundle_set_id_display           String                            @db.VarChar(100)
+  branch_id                       String                            @db.VarChar(50)
+  bundle_set_name                 String                            @db.VarChar(250)
+  status                          record_status
+  description                     String?
+  vat                             vat_type
+  unit                            String                            @db.VarChar(250)
+  total_price                     Decimal                           @db.Decimal(10, 2)
+  start_date                      DateTime?                         @db.Timestamp(6)
+  end_date                        DateTime?                         @db.Timestamp(6)
+  updated_at                      DateTime                          @db.Timestamp(6)
+  created_at                      DateTime                          @db.Timestamp(6)
+  branch                          branch                            @relation(fields: [branch_id], references: [branch_id])
+  bundle_set_course_item          bundle_set_course_item[]
+  bundle_set_product_item         bundle_set_product_item[]
+  sale_order_item                 sale_order_item[]
+  sale_order_item_bundle_set_item sale_order_item_bundle_set_item[]
+}
+
+model bundle_set_product_item {
+  bundle_set_id   String               @db.VarChar(50)
+  item_id         String               @db.VarChar(50)
+  quantity        Decimal              @db.Decimal(10, 2)
+  price           Decimal              @db.Decimal(10, 2)
+  promotion_price Decimal              @db.Decimal(10, 2)
+  type            all_product_category
+  updated_at      DateTime             @db.Timestamp(6)
+  created_at      DateTime             @db.Timestamp(6)
+  product         product              @relation(fields: [item_id], references: [product_id], map: "bundle_set_item_product")
+  bundle_set      bundle_set           @relation(fields: [bundle_set_id], references: [bundle_set_id])
+
+  @@id([bundle_set_id, item_id])
+}
+
+model bundle_set_course_item {
+  bundle_set_id   String               @db.VarChar(50)
+  item_id         String               @db.VarChar(50)
+  quantity        Decimal              @db.Decimal(10, 2)
+  price           Decimal              @db.Decimal(10, 2)
+  promotion_price Decimal              @db.Decimal(10, 2)
+  type            all_product_category
+  updated_at      DateTime             @db.Timestamp(6)
+  created_at      DateTime             @db.Timestamp(6)
+  bundle_set      bundle_set           @relation(fields: [bundle_set_id], references: [bundle_set_id])
+  course_item     course_item          @relation(fields: [item_id], references: [course_item_id])
+
+  @@id([bundle_set_id, item_id])
+}
+
+model category {
+  category_id      String               @id @db.VarChar(50)
+  clinic_id        String               @db.VarChar(50)
+  name             String               @db.VarChar(250)
+  product_category all_product_category
+  updated_at       DateTime             @db.Timestamp(6)
+  created_at       DateTime             @db.Timestamp(6)
+  status           record_status        @default(ACTIVE)
+  code             String?              @db.VarChar(50)
+  clinic           clinic               @relation(fields: [clinic_id], references: [clinic_id])
+  course           course[]
+  product          product[]
+  voucher_category voucher_category[]
+}
+
+model clinic {
+  clinic_id                            String                                 @id @db.VarChar(50)
+  clinic_name                          String?                                @db.VarChar(200)
+  clinic_logo                          String?
+  tel                                  String                                 @db.VarChar(20)
+  email                                String                                 @db.VarChar(100)
+  status                               record_status
+  status_send_password                 Boolean                                @default(false)
+  updated_at                           DateTime?                              @db.Timestamp(6)
+  created_at                           DateTime?                              @db.Timestamp(6)
+  is_upload_image_course               Boolean                                @default(false)
+  is_sync_with_erp                     Boolean                                @default(false)
+  branch                               branch[]
+  category                             category[]
+  clinic_subscription                  clinic_subscription[]
+  clinic_to_clinic_transfer_white_list clinic_to_clinic_transfer_white_list[]
+  condition_wallet                     condition_wallet[]
+  customer                             customer[]
+  customer_group                       customer_group[]
+  customer_registration                customer_registration[]
+  diagnosis_item                       diagnosis_item[]
+  distributor                          distributor[]
+  documents_signed                     documents_signed[]
+  sub_category                         sub_category[]
+  template_detail                      template_detail[]
+  user                                 user[]
+}
+
+model clinic_payment_method {
+  clinic_payment_method_id String                  @id @db.VarChar(50)
+  branch_id                String                  @db.VarChar(50)
+  name                     String                  @db.VarChar(250)
+  payment_type             clinic_payment_type
+  status                   record_status
+  created_by               String                  @db.VarChar(50)
+  updated_at               DateTime                @db.Timestamp(6)
+  created_at               DateTime                @db.Timestamp(6)
+  code                     String?                 @db.VarChar(50)
+  branch                   branch                  @relation(fields: [branch_id], references: [branch_id])
+  customer_wallet          customer_wallet[]
+  receipt                  receipt[]
+  receive_order_receipt    receive_order_receipt[]
+}
+
+model clinic_registration {
+  registration_id      String                       @id @db.VarChar(50)
+  clinic_name          String?                      @db.VarChar(200)
+  clinic_logo          String?
+  license_no           String                       @db.VarChar(50)
+  tax_id               String                       @db.VarChar(50)
+  fax                  String?                      @db.VarChar(20)
+  tel                  String                       @db.VarChar(20)
+  email                String                       @db.VarChar(100)
+  line_id              String?                      @db.VarChar(100)
+  address              String                       @db.VarChar(250)
+  sub_district         String                       @db.VarChar(100)
+  district             String                       @db.VarChar(100)
+  province             String                       @db.VarChar(100)
+  postcode             String                       @db.VarChar(5)
+  status               record_status
+  registration_status  approved_status?
+  subscription_plan_id String?                      @db.VarChar(50)
+  receipt_id           String?                      @db.VarChar(50)
+  updated_at           DateTime?                    @db.Timestamp(6)
+  created_at           DateTime?                    @db.Timestamp(6)
+  receipt              clinic_subscription_receipt? @relation(fields: [receipt_id], references: [receipt_id])
+  subscription_plan    subscription_plan?           @relation(fields: [subscription_plan_id], references: [plan_id])
+}
+
+model clinic_subscription {
+  subscription_id             String                       @id @db.VarChar(50)
+  clinic_id                   String                       @db.VarChar(50)
+  year                        Int
+  subscription_plan_id        String                       @db.VarChar(50)
+  receipt_id                  String?                      @db.VarChar(50)
+  plan_name_th                String                       @db.VarChar(100)
+  plan_name_en                String                       @db.VarChar(100)
+  end_date                    DateTime                     @db.Timestamp(6)
+  start_date                  DateTime                     @db.Timestamp(6)
+  price                       Decimal                      @db.Decimal(10, 4)
+  status                      record_status
+  payment_status              payment_status
+  updated_at                  DateTime                     @db.Timestamp(6)
+  created_at                  DateTime                     @db.Timestamp(6)
+  clinic                      clinic                       @relation(fields: [clinic_id], references: [clinic_id])
+  clinic_subscription_receipt clinic_subscription_receipt? @relation(fields: [receipt_id], references: [receipt_id])
+  subscription_plan           subscription_plan            @relation(fields: [subscription_plan_id], references: [plan_id])
+}
+
+model clinic_subscription_receipt {
+  receipt_id          String                @id @db.VarChar(50)
+  receipt             String
+  evidence            String
+  amount_pay          Decimal?              @db.Decimal(10, 2)
+  payment_method_id   String?               @db.VarChar(50)
+  payment_date        DateTime?             @db.Timestamp(6)
+  updated_at          DateTime?             @db.Timestamp(6)
+  created_at          DateTime?             @db.Timestamp(6)
+  clinic_registration clinic_registration[]
+  clinic_subscription clinic_subscription[]
+  payment_method      payment_method?       @relation(fields: [payment_method_id], references: [method_id])
+}
+
+model sale_receipt_commission {
+  sale_order_id     String     @db.VarChar(50)
+  branch_id         String     @db.VarChar(50)
+  reciept_id        String     @db.VarChar(50)
+  user_id           String?    @db.VarChar(50)
+  calculate_percent Decimal?   @db.Decimal(10, 2)
+  shared            Decimal?   @db.Decimal(10, 2)
+  Sales             Decimal?   @db.Decimal(10, 2)
+  updated_at        DateTime?  @db.Timestamp(6)
+  created_at        DateTime?  @db.Timestamp(6)
+  receipt           receipt    @relation(fields: [reciept_id, branch_id], references: [receipt_id, branch_id])
+  sale_order        sale_order @relation(fields: [sale_order_id, branch_id], references: [sale_order_id, branch_id])
+
+  @@id([sale_order_id, reciept_id, branch_id])
+}
+
+model sale_wallet_commission {
+  trans_id          String          @db.VarChar(50)
+  branch_id         String          @db.VarChar(50)
+  user_id           String?         @db.VarChar(50)
+  calculate_percent Decimal?        @db.Decimal(10, 2)
+  shared            Decimal?        @db.Decimal(10, 2)
+  Sales             Decimal?        @db.Decimal(10, 2)
+  updated_at        DateTime?       @db.Timestamp(6)
+  created_at        DateTime?       @db.Timestamp(6)
+  wallet            customer_wallet @relation(fields: [trans_id, branch_id], references: [trans_id, branch_id])
+
+  @@id([trans_id, branch_id])
+}
+
+model condition_wallet {
+  condition_id    String                @id @db.VarChar(50)
+  clinic_id       String                @db.VarChar(50)
+  bonus           Decimal               @db.Decimal(10, 2)
+  bonus_type      type_condition_wallet
+  status          record_status
+  minimum_balance Decimal               @db.Decimal(10, 2)
+  maximum_balance Decimal               @db.Decimal(10, 2)
+  updated_at      DateTime              @db.Timestamp(6)
+  created_at      DateTime              @db.Timestamp(6)
+  clinic          clinic                @relation(fields: [clinic_id], references: [clinic_id])
+}
+
+model course_item {
+  course_item_id                  String                            @id @db.VarChar(50)
+  course_id                       String                            @db.VarChar(50)
+  unit                            String                            @default("-") @db.VarChar(50)
+  name                            String                            @db.VarChar(256)
+  price                           Decimal                           @db.Decimal(10, 2)
+  amount                          Decimal                           @default(0) @db.Decimal(10, 2)
+  vat                             vat_type
+  start_date                      DateTime?                         @db.Timestamp(6)
+  end_date                        DateTime?                         @db.Timestamp(6)
+  promotion_price                 Decimal?                          @db.Decimal(10, 2)
+  created_by                      String                            @db.VarChar(50)
+  updated_at                      DateTime                          @db.Timestamp(6)
+  created_at                      DateTime                          @db.Timestamp(6)
+  appointment_alert               Int?
+  appointment_alert_unit          date_unit?
+  time_per_course                 Decimal?                          @db.Decimal(10, 2)
+  weight_per_time                 Decimal?                          @db.Decimal(10, 2)
+  status                          record_status                     @default(ACTIVE)
+  bundle_set_course_item          bundle_set_course_item[]
+  give_away_course_item           course_give_away[]
+  course                          course                            @relation(fields: [course_id], references: [course_id])
+  course_item_product             course_item_product[]
+  customer_coures                 customer_coures[]
+  customer_course_usage_log       customer_course_usage_log[]
+  product_course_give_away        product_course_give_away[]
+  sale_order_item                 sale_order_item[]
+  sale_order_item_bundle_set_item sale_order_item_bundle_set_item[]
+  service_usage_expiration_item   service_usage_expiration_item[]
+  service_usage_item              service_usage_item[]
+}
+
+model course_item_product {
+  product_id     String      @db.VarChar(50)
+  course_item_id String      @db.VarChar(50)
+  quantity       Decimal     @db.Decimal(10, 2)
+  updated_at     DateTime    @db.Timestamp(6)
+  created_at     DateTime    @db.Timestamp(6)
+  course_item    course_item @relation(fields: [course_item_id], references: [course_item_id])
+  product        product     @relation(fields: [product_id], references: [product_id])
+
+  @@id([product_id, course_item_id])
+}
+
+model course_operator {
+  course_id       String        @db.VarChar(50)
+  role_id         role_enum
+  commission      Decimal       @db.Decimal(10, 2)
+  commission_unit amount_unit
+  operator_type   operator_type
+  course          course        @relation(fields: [course_id], references: [course_id])
+  role            role          @relation(fields: [role_id], references: [role_id])
+
+  @@id([course_id, role_id, operator_type])
+}
+
+model course_operator_user {
+  service_usage_id String        @db.VarChar(50)
+  user_id          String        @db.VarChar(50)
+  branch_id        String        @db.VarChar(50)
+  operator_type    operator_type
+  service_usage    service_usage @relation(fields: [service_usage_id, branch_id], references: [service_usage_id, branch_id])
+  user             user          @relation(fields: [user_id], references: [user_id])
+
+  @@id([service_usage_id, user_id, operator_type])
+  @@index([user_id, branch_id])
+  @@index([user_id])
+  @@index([branch_id])
+}
+
+model customer {
+  customer_id               String                      @db.VarChar(50)
+  clinic_id                 String                      @db.VarChar(50)
+  branch_id                 String                      @db.VarChar(50)
+  title                     String                      @db.VarChar(30)
+  name                      String                      @db.VarChar(100)
+  lastname                  String                      @db.VarChar(100)
+  nickname                  String?                     @db.VarChar(50)
+  gender                    String                      @db.VarChar(20)
+  birth_date                String?                     @db.VarChar(50)
+  personal_id               String                      @db.VarChar(20)
+  status_marry              String?                     @db.VarChar(100)
+  address                   String?                     @db.VarChar(300)
+  sub_district              String?                     @db.VarChar(200)
+  district                  String?                     @db.VarChar(200)
+  province                  String?                     @db.VarChar(200)
+  postcode                  String?                     @db.VarChar(50)
+  phone_number              String?                     @db.VarChar(15)
+  second_phone_number       String?                     @db.VarChar(15)
+  attendant                 String?                     @db.VarChar(100)
+  email                     String?                     @db.VarChar(200)
+  line_id                   String?                     @db.VarChar(250)
+  customer_image            String?
+  customer_status           Boolean
+  status_vip                Boolean
+  customer_group            String?                     @db.VarChar(50)
+  point_accumulate_all_old  Decimal?                    @db.Decimal(10, 2)
+  point_current_year        Decimal?                    @db.Decimal(10, 2)
+  user_create               String                      @db.VarChar(50)
+  updated_at                DateTime?                   @db.Timestamp(6)
+  created_at                DateTime?                   @db.Timestamp(6)
+  nationality               nationality                 @default(THAI)
+  ethnicity                 String?                     @db.VarChar(100)
+  appointment               appointment[]
+  appointment_reminder      appointment_reminder[]
+  attendant_detail          user?                       @relation(fields: [attendant], references: [user_id])
+  branch_register           branch                      @relation(fields: [branch_id], references: [branch_id])
+  clinic                    clinic                      @relation(fields: [clinic_id], references: [clinic_id])
+  customer_group_info       customer_group?             @relation(fields: [customer_group], references: [group_id])
+  customer_attendant        customer_attendant[]
+  customer_coures           customer_coures[]
+  customer_course_usage_log customer_course_usage_log[]
+  customer_info             customer_info?
+  customer_wallet           customer_wallet[]
+  documents_signed_customer documents_signed_customer[]
+  history_customer_group    history_customer_group[]
+  opd                       opd[]
+  prescription              prescription[]
+  sale_order                sale_order[]
+  service_usage             service_usage[]             @relation("service_usage")
+  service_usage_owner       service_usage[]             @relation("service_usage_owner")
+  service_usage_expiration  service_usage_expiration[]
+  wallet_log                wallet_log[]
+
+  @@id([customer_id, clinic_id])
+  @@index([attendant])
+  @@index([customer_group])
+  @@index([clinic_id])
+  @@index([branch_id])
+}
+
+model customer_info {
+  customer_id                String   @db.VarChar(50)
+  clinic_id                  String   @db.VarChar(50)
+  allergy                    String?
+  surgery                    String?
+  congenital_disease         String?
+  other_important            String?
+  weight                     Decimal? @default(0) @db.Decimal(10, 2)
+  height                     Decimal? @default(0) @db.Decimal(10, 2)
+  monthly_income             String?  @db.VarChar(100)
+  career                     String?  @db.VarChar(200)
+  chanel                     String?  @db.VarChar(200)
+  education                  String?  @db.VarChar(200)
+  know_method                String?
+  decide_come_here           String?
+  social_media_frequent      String?
+  updated_at                 DateTime @db.Timestamp(6)
+  created_at                 DateTime @db.Timestamp(6)
+  bmi                        String?  @db.VarChar(20)
+  bp                         String?  @db.VarChar(20)
+  bt                         String?  @db.VarChar(20)
+  emergency_contact_name     String?  @db.VarChar(200)
+  emergency_contact_phone    String?  @db.VarChar(20)
+  emergency_contact_relation String?  @db.VarChar(100)
+  pr                         String?  @db.VarChar(20)
+  rr                         String?  @db.VarChar(20)
+  uid                        String?  @db.VarChar(50)
+  customer                   customer @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+
+  @@id([customer_id, clinic_id])
+}
+
+model default_permission {
+  role_id       role_enum
+  permission_id String     @db.VarChar(50)
+  updated_at    DateTime?  @db.Timestamp(6)
+  created_at    DateTime?  @db.Timestamp(6)
+  permission    permission @relation(fields: [permission_id], references: [permission_id])
+  role          role       @relation(fields: [role_id], references: [role_id])
+
+  @@id([role_id, permission_id])
+}
+
+model distributor {
+  distributor_id     String           @id @db.VarChar(50)
+  clinic_id          String           @db.VarChar(50)
+  distributor_name   String           @db.VarChar(200)
+  distributor_branch String?          @default("สำนักงานใหญ่") @db.VarChar(150)
+  tax_id             String?          @db.VarChar(50)
+  tel                String?          @db.VarChar(20)
+  address            String?          @db.VarChar(250)
+  sub_district       String?          @db.VarChar(100)
+  district           String?          @db.VarChar(100)
+  province           String?          @db.VarChar(100)
+  postcode           String?          @db.VarChar(5)
+  status             record_status
+  created_by         String           @db.VarChar(50)
+  updated_at         DateTime         @db.Timestamp(6)
+  created_at         DateTime         @db.Timestamp(6)
+  branch_id          String           @db.VarChar(50)
+  branch             branch           @relation(fields: [branch_id], references: [branch_id])
+  clinic             clinic           @relation(fields: [clinic_id], references: [clinic_id])
+  purchase_order     purchase_order[]
+  receive_order      receive_order[]
+}
+
+model document_form {
+  form_id    String   @id @db.VarChar(50)
+  preview    String
+  name       String   @db.VarChar(200)
+  updated_at DateTime @db.Timestamp(6)
+  created_at DateTime @db.Timestamp(6)
+  branch     branch[]
+}
+
+model document_format {
+  format_id              String                   @id @db.VarChar(50)
+  document_key           document_key
+  prefix                 String                   @db.VarChar(50)
+  branch_id              String                   @db.VarChar(50)
+  title                  String                   @db.VarChar(50)
+  format_type            format_type
+  start_number           Int
+  digit_number           Int
+  updated_at             DateTime?                @db.Timestamp(6)
+  created_at             DateTime?                @db.Timestamp(6)
+  branch                 branch                   @relation(fields: [branch_id], references: [branch_id])
+  document_format_number document_format_number[]
+
+  @@unique([document_key, branch_id])
+  @@index([format_id, prefix])
+}
+
+model document_format_number {
+  format_id       String          @db.VarChar(50)
+  prefix          String          @db.VarChar(50)
+  current_number  Int
+  updated_at      DateTime?       @db.Timestamp(6)
+  created_at      DateTime?       @db.Timestamp(6)
+  document_format document_format @relation(fields: [format_id], references: [format_id])
+
+  @@unique([format_id, prefix])
+}
+
+model document_format_default {
+  document_key document_key @id
+  title        String       @db.VarChar(50)
+  prefix       String       @db.VarChar(50)
+  updated_at   DateTime?    @db.Timestamp(6)
+  created_at   DateTime?    @db.Timestamp(6)
+}
+
+model documents_signed {
+  doc_id                     String                       @id @db.VarChar(50)
+  clinic_id                  String?                      @db.VarChar(50)
+  document_name              String                       @db.VarChar(200)
+  purpose_use                String                       @db.VarChar(100)
+  document_type              document_type
+  expiration_period          String                       @db.VarChar(10)
+  document_url               String?
+  position_sign              String
+  status                     record_status
+  updated_at                 DateTime?                    @db.Timestamp(6)
+  created_at                 DateTime?                    @db.Timestamp(6)
+  course                     course[]
+  clinic                     clinic?                      @relation(fields: [clinic_id], references: [clinic_id])
+  documents_signed_customer  documents_signed_customer[]
+  product                    product[]
+  sale_order_document_signed sale_order_document_signed[]
+}
+
+model documents_signed_customer {
+  doc_id           String           @db.VarChar(50)
+  clinic_id        String           @db.VarChar(50)
+  customer_id      String           @db.VarChar(50)
+  document_url     String?
+  status           document_status
+  exp              DateTime?        @db.Timestamp(6)
+  updated_at       DateTime?        @db.Timestamp(6)
+  created_at       DateTime?        @db.Timestamp(6)
+  customer         customer         @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  documents_signed documents_signed @relation(fields: [doc_id], references: [doc_id])
+
+  @@id([doc_id, clinic_id, customer_id])
+  @@index([customer_id, clinic_id])
+  @@index([doc_id])
+  @@index([clinic_id])
+}
+
+model examination_room {
+  room_id     String        @id @db.VarChar(50)
+  branch_id   String        @db.VarChar(50)
+  room_name   String        @db.VarChar(50)
+  room_status record_status
+  appointment appointment[]
+  branch      branch        @relation(fields: [branch_id], references: [branch_id])
+  opd         opd[]
+}
+
+model customer_group {
+  group_id        String        @id @db.VarChar(50)
+  group_name      String        @db.VarChar(50)
+  clinic_id       String        @db.VarChar(50)
+  discount        Decimal       @db.Decimal(10, 2)
+  minimum_balance Decimal       @db.Decimal(10, 2)
+  color_group     String?       @db.VarChar(80)
+  auto_promote    Boolean
+  require_access  Boolean
+  discount_type   discount_type
+  status          record_status
+  updated_at      DateTime?     @db.Timestamp(6)
+  created_at      DateTime?     @db.Timestamp(6)
+  order           Int?
+  no_expiration   Boolean       @default(false)
+  customer        customer[]
+  clinic          clinic        @relation(fields: [clinic_id], references: [clinic_id])
+}
+
+model history_customer_group {
+  history_customer_group_id String          @id @db.VarChar(50)
+  customer_id               String          @db.VarChar(50)
+  clinic_id                 String          @db.VarChar(50)
+  new_group_name            String          @db.VarChar(50)
+  old_group_name            String          @db.VarChar(50)
+  type_adjust               String          @db.VarChar(30)
+  point_accumulate_all_old  Decimal         @db.Decimal(10, 2)
+  point_current_year        Decimal         @db.Decimal(10, 2)
+  point_all                 Decimal         @db.Decimal(10, 2)
+  date_start_permission     String          @db.VarChar(50)
+  date_end_permission       String?         @db.VarChar(50)
+  user_create               String?         @db.VarChar(50)
+  created_at                DateTime?       @db.Timestamp(6)
+  approved_status           approved_status @default(PENDING)
+  customer                  customer        @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+
+  @@index([customer_id, clinic_id])
+}
+
+model inventory {
+  branch_id  String    @db.VarChar(50)
+  item_id    String    @db.VarChar(50)
+  lot_id     String    @db.VarChar(50)
+  in_stock   Decimal?  @db.Decimal(10, 2)
+  updated_at DateTime? @db.Timestamp(6)
+  created_at DateTime? @db.Timestamp(6)
+  product    product   @relation(fields: [item_id], references: [product_id])
+
+  @@id([branch_id, item_id, lot_id])
+}
+
+model inventory_log {
+  inventory_log_id String             @id @db.VarChar(50)
+  branch_id        String             @db.VarChar(50)
+  document_id      String?            @db.VarChar(50)
+  item_id          String             @db.VarChar(50)
+  lot_id           String             @db.VarChar(50)
+  stock_in         Decimal            @db.Decimal(10, 2)
+  stock_out        Decimal            @db.Decimal(10, 2)
+  date             DateTime           @default(now()) @db.Timestamp(6)
+  type             inventory_log_type @default(SYSTEM)
+  remark           String?
+  create_by        String             @default("U001")
+  current_stock    Decimal            @default(0)
+  updated_at       DateTime           @db.Timestamp(6)
+  created_at       DateTime           @db.Timestamp(6)
+  createByUser     user               @relation(fields: [create_by], references: [user_id])
+
+  @@unique([branch_id, document_id, item_id, lot_id])
+  @@index([document_id, branch_id])
+}
+
+model opd_image {
+  image_id    String        @unique @db.VarChar(50)
+  opd_id      String        @db.VarChar(50)
+  user_create String        @db.VarChar(50)
+  date_upload String        @db.VarChar(50)
+  type_image  typeImageOpd
+  detail      String
+  url_image   String
+  updated_at  DateTime?     @db.Timestamp(6)
+  created_at  DateTime      @db.Timestamp(6)
+  branch_id   String        @db.VarChar(50)
+  status      record_status @default(ACTIVE)
+  opd         opd           @relation(fields: [opd_id, branch_id], references: [opd_id, branch_id])
+
+  @@id([image_id, opd_id])
+  @@index([branch_id, opd_id])
+}
+
+model payment_method {
+  method_id                   String                        @id @db.VarChar(50)
+  name                        String?                       @db.VarChar(200)
+  description                 String?                       @db.VarChar(200)
+  payment_type                clinic_payment_type
+  updated_at                  DateTime?                     @db.Timestamp(6)
+  created_at                  DateTime?                     @db.Timestamp(6)
+  clinic_subscription_receipt clinic_subscription_receipt[]
+}
+
+model plan_condition {
+  condition_id                String                        @id @db.VarChar(50)
+  name                        String                        @db.VarChar(200)
+  description                 String
+  condition                   String
+  unit                        String                        @db.VarChar(50)
+  updated_at                  DateTime?                     @db.Timestamp(6)
+  created_at                  DateTime?                     @db.Timestamp(6)
+  subscription_plan_condition subscription_plan_condition[]
+}
+
+model prescription {
+  prescribe_id      String              @id @db.VarChar(50)
+  customer_id       String              @db.VarChar(50)
+  branch_id         String              @db.VarChar(50)
+  clinic_id         String              @db.VarChar(50)
+  opd_id            String?             @db.VarChar(50)
+  sale_order_id     String?             @db.VarChar(50)
+  status            statusPrescription
+  user_create       String              @db.VarChar(50)
+  updated_at        DateTime?           @db.Timestamp(6)
+  created_at        DateTime?           @db.Timestamp(6)
+  branch            branch              @relation(fields: [branch_id], references: [branch_id])
+  customer          customer            @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  opd               opd?                @relation(fields: [opd_id, branch_id], references: [opd_id, branch_id])
+  sale_order        sale_order?         @relation(fields: [sale_order_id, branch_id], references: [sale_order_id, branch_id])
+  user              user                @relation(fields: [user_create], references: [user_id])
+  prescription_item prescription_item[]
+}
+
+model prescription_item {
+  prescribe_id String       @db.VarChar(50)
+  drug_id      String       @db.VarChar(50)
+  drug_name    String       @db.VarChar(250)
+  price        Decimal      @db.Decimal(10, 2)
+  detail       String?
+  qty          Decimal      @db.Decimal(10, 2)
+  total_price  Decimal      @db.Decimal(10, 2)
+  created_at   DateTime?    @db.Timestamp(6)
+  date_exp     DateTime?    @db.Timestamp(6)
+  lot_id       String       @default("") @db.VarChar(50)
+  id           String       @id @unique @db.VarChar(50)
+  is_free      Boolean      @default(false)
+  product      product      @relation(fields: [drug_id], references: [product_id])
+  prescription prescription @relation(fields: [prescribe_id], references: [prescribe_id])
+
+  @@index([prescribe_id])
+  @@index([drug_id])
+}
+
+model permission {
+  permission_id      String               @id @db.VarChar(100)
+  name_TH            String               @db.VarChar(50)
+  name_EN            String               @db.VarChar(50)
+  updated_at         DateTime?            @db.Timestamp(6)
+  created_at         DateTime?            @db.Timestamp(6)
+  group_name_TH      String               @default("") @db.VarChar(50)
+  group_name_EN      String               @default("") @db.VarChar(50)
+  sequence           Int?
+  default_permission default_permission[]
+  user_permission    user_permission[]
+}
+
+model product {
+  product_id                      String                            @id @db.VarChar(50)
+  product_id_display              String                            @db.VarChar(50)
+  branch_id                       String                            @db.VarChar(50)
+  description                     String?
+  category_id                     String                            @db.VarChar(50)
+  sub_category_id                 String                            @db.VarChar(50)
+  image                           String?
+  product_name                    String                            @db.VarChar(250)
+  product_category                product_category
+  product_type                    product_type?
+  price                           Decimal?                          @db.Decimal(10, 2)
+  doc_id                          String?                           @db.VarChar(50)
+  updated_at                      DateTime?                         @db.Timestamp(6)
+  created_at                      DateTime?                         @db.Timestamp(6)
+  is_global                       Boolean
+  out_of_stock_alert              Int?
+  vat                             vat_type?
+  status                          record_status
+  unit                            String                            @db.VarChar(250)
+  promotion_price                 Decimal?                          @db.Decimal(10, 2)
+  start_date                      DateTime?                         @db.Timestamp(6)
+  end_date                        DateTime?                         @db.Timestamp(6)
+  appointment_alert               Int?
+  appointment_alert_unit          date_unit?
+  maximum_discount                Decimal?                          @db.Decimal(10, 2)
+  maximum_discount_unit           amount_unit?
+  bundle_set_product_item         bundle_set_product_item[]
+  course_item_product             course_item_product[]
+  course_product_give_away        course_product_give_away[]
+  inventory                       inventory[]
+  prescription_item               prescription_item[]
+  branch                          branch                            @relation(fields: [branch_id], references: [branch_id])
+  category                        category                          @relation(fields: [category_id], references: [category_id])
+  documents_signed                documents_signed?                 @relation(fields: [doc_id], references: [doc_id])
+  sub_category                    sub_category                      @relation(fields: [sub_category_id], references: [sub_category_id])
+  product_course_give_away        product_course_give_away[]
+  give_away_product               product_give_away[]               @relation("this_product_bind_with")
+  product_give_away               product_give_away[]               @relation("which_bind_to_this_product")
+  purchase_order_item             purchase_order_item[]
+  receive_order_item              receive_order_item[]
+  sale_order_item                 sale_order_item[]
+  sale_order_item_bundle_set_item sale_order_item_bundle_set_item[]
+  service_usage_item              service_usage_item[]
+  service_usage_item_product      service_usage_item_product[]
+  transfer_order_item             transfer_order_item[]
+  voucher_product                 voucher_product[]
+}
+
+model course {
+  course_id                String                     @id @db.VarChar(50)
+  course_id_display        String                     @db.VarChar(50)
+  branch_id                String                     @db.VarChar(50)
+  category_id              String                     @db.VarChar(50)
+  course_name              String                     @db.VarChar(250)
+  sub_category_id          String                     @db.VarChar(50)
+  expire_in                Int
+  is_global                Boolean
+  description              String?
+  status                   record_status
+  maximum_discount         Decimal                    @db.Decimal(10, 2)
+  maximum_discount_unit    amount_unit
+  product_type             product_type
+  updated_at               DateTime                   @db.Timestamp(6)
+  created_at               DateTime                   @db.Timestamp(6)
+  course_iamge             String?
+  doc_id                   String?                    @db.VarChar(50)
+  branch                   branch                     @relation(fields: [branch_id], references: [branch_id])
+  category                 category                   @relation(fields: [category_id], references: [category_id])
+  documents_signed         documents_signed?          @relation(fields: [doc_id], references: [doc_id])
+  sub_category             sub_category               @relation(fields: [sub_category_id], references: [sub_category_id])
+  course_give_away         course_give_away[]
+  course_item              course_item[]
+  course_operator          course_operator[]
+  course_product_give_away course_product_give_away[]
+  voucher_course           voucher_course[]
+
+  @@index([doc_id])
+}
+
+model voucher {
+  voucher_id               String                       @id @db.VarChar(50)
+  clinic_id                String                       @db.VarChar(50)
+  voucher_code             String                       @db.VarChar(50)
+  voucher_name             String                       @db.VarChar(50)
+  start_date               DateTime                     @db.Timestamp(6)
+  end_date                 DateTime                     @db.Timestamp(6)
+  discount                 Decimal                      @db.Decimal(10, 2)
+  discount_unit            discount_type
+  description              String?
+  limit_per_voucher        Decimal                      @db.Decimal(10, 2)
+  limit_per_user           Decimal                      @db.Decimal(10, 2)
+  minimum_balance          Decimal                      @db.Decimal(10, 2)
+  voucher_type             voucher_type
+  voucher_participate_type voucher_participate_type
+  current_used_count       Decimal                      @default(0) @db.Decimal(10, 2)
+  updated_at               DateTime?                    @db.Timestamp(6)
+  created_at               DateTime?                    @db.Timestamp(6)
+  status                   record_status                @default(ACTIVE)
+  condition_id             condition?
+  sale_order               sale_order[]
+  condition                voucher_available_condition? @relation(fields: [condition_id], references: [condition_id])
+  voucher_branch           voucher_branch[]
+  voucher_category         voucher_category[]
+  voucher_course           voucher_course[]
+  voucher_product          voucher_product[]
+  voucher_sub_category     voucher_sub_category[]
+
+  @@unique([voucher_code, clinic_id])
+}
+
+model voucher_log {
+  clinic_id     String @db.VarChar(50)
+  voucher_code  String @db.VarChar(50)
+  sale_order_id String @db.VarChar(50)
+  customer_id   String @db.VarChar(50)
+
+  @@id([clinic_id, voucher_code, sale_order_id, customer_id])
+}
+
+model voucher_available_condition {
+  condition_id   condition @id
+  name_th        String    @db.VarChar(150)
+  name_en        String    @db.VarChar(150)
+  description_th String
+  description_en String
+  voucher        voucher[]
+}
+
+model product_give_away {
+  branch_id         String  @db.VarChar(50)
+  give_away_id      String  @db.VarChar(200)
+  item_id           String  @db.VarChar(50)
+  product_give_away product @relation("this_product_bind_with", fields: [give_away_id], references: [product_id])
+  product           product @relation("which_bind_to_this_product", fields: [item_id], references: [product_id])
+
+  @@id([item_id, give_away_id])
+}
+
+model product_course_give_away {
+  branch_id        String      @db.VarChar(50)
+  give_away_id     String      @db.VarChar(200)
+  item_id          String      @db.VarChar(50)
+  course_give_away course_item @relation(fields: [give_away_id], references: [course_item_id])
+  product          product     @relation(fields: [item_id], references: [product_id])
+
+  @@id([item_id, give_away_id])
+}
+
+model course_give_away {
+  branch_id             String      @db.VarChar(50)
+  give_away_id          String      @db.VarChar(200)
+  item_id               String      @db.VarChar(50)
+  course_item_give_away course_item @relation(fields: [give_away_id], references: [course_item_id])
+  course                course      @relation(fields: [item_id], references: [course_id])
+
+  @@id([item_id, give_away_id])
+}
+
+model course_product_give_away {
+  branch_id         String  @db.VarChar(50)
+  give_away_id      String  @db.VarChar(200)
+  item_id           String  @db.VarChar(50)
+  product_give_away product @relation(fields: [give_away_id], references: [product_id])
+  course            course  @relation(fields: [item_id], references: [course_id])
+
+  @@id([item_id, give_away_id])
+}
+
+model purchase_order {
+  purchase_order_id     String                @db.VarChar(50)
+  branch_id             String                @db.VarChar(50)
+  distributor_id        String?               @db.VarChar(50)
+  purchase_user_id      String?               @db.VarChar(50)
+  date                  DateTime?             @db.Timestamp(6)
+  remark                String?
+  extra_remark          String?
+  vat_type              vat_type?
+  total                 Decimal?              @db.Decimal(10, 2)
+  discount              Decimal               @db.Decimal(10, 2)
+  round_decimal         Boolean?
+  net                   Decimal               @db.Decimal(10, 2)
+  created_by            String                @db.VarChar(50)
+  purchase_order_status purchase_order_status
+  status                record_status
+  updated_at            DateTime?             @db.Timestamp(6)
+  created_at            DateTime?             @db.Timestamp(6)
+  vat                   Decimal?              @db.Decimal(10, 2)
+  updated_by            String?               @db.VarChar(50)
+  distributor           distributor?          @relation(fields: [distributor_id], references: [distributor_id])
+  purchase_user         user?                 @relation(fields: [purchase_user_id], references: [user_id])
+  purchase_order_item   purchase_order_item[]
+
+  @@id([purchase_order_id, branch_id])
+}
+
+model purchase_order_item {
+  purchase_order_id String         @db.VarChar(50)
+  item_id           String         @db.VarChar(50)
+  branch_id         String         @db.VarChar(50)
+  price_per_unit    Decimal        @db.Decimal(10, 2)
+  item_name         String         @db.VarChar(250)
+  quantity          Decimal        @db.Decimal(10, 2)
+  price             Decimal        @db.Decimal(10, 2)
+  total             Decimal        @db.Decimal(10, 2)
+  updated_at        DateTime?      @db.Timestamp(6)
+  created_at        DateTime?      @db.Timestamp(6)
+  discount_per_unit Decimal        @default(0) @db.Decimal(10, 2)
+  product           product        @relation(fields: [item_id], references: [product_id])
+  purchase_order    purchase_order @relation(fields: [purchase_order_id, branch_id], references: [purchase_order_id, branch_id])
+
+  @@id([purchase_order_id, branch_id, item_id])
+}
+
+model receipt {
+  receipt_id              String                    @db.VarChar(50)
+  sale_order_id           String                    @db.VarChar(50)
+  branch_id               String                    @db.VarChar(50)
+  paid_amount             Decimal                   @db.Decimal(10, 2)
+  wallet_amount           Decimal                   @db.Decimal(10, 2)
+  recieved_by_user_id     String                    @db.VarChar(50)
+  evidence                String?
+  payment_method_id       String?                   @db.VarChar(50)
+  remark                  String?
+  status                  record_status?
+  created_by              String                    @db.VarChar(50)
+  date                    DateTime?                 @db.Timestamp(6)
+  updated_at              DateTime?                 @db.Timestamp(6)
+  created_at              DateTime?                 @db.Timestamp(6)
+  updated_by              String?                   @db.VarChar(50)
+  clinic_payment_method   clinic_payment_method?    @relation(fields: [payment_method_id], references: [clinic_payment_method_id])
+  recieved_by_user        user                      @relation(fields: [recieved_by_user_id], references: [user_id])
+  sale_order              sale_order                @relation(fields: [sale_order_id, branch_id], references: [sale_order_id, branch_id])
+  sale_receipt_commission sale_receipt_commission[]
+
+  @@id([receipt_id, branch_id])
+  @@index([sale_order_id, branch_id])
+  @@index([recieved_by_user_id])
+  @@index([payment_method_id])
+  @@index([date])
+}
+
+model customer_coures {
+  sale_order_id       String      @db.VarChar(50)
+  customer_id         String      @db.VarChar(50)
+  branch_id           String      @db.VarChar(50)
+  clinic_id           String      @db.VarChar(50)
+  item_id             String      @db.VarChar(50)
+  amount              Decimal?    @db.Decimal(10, 2)
+  updated_at          DateTime?   @db.Timestamp(6)
+  created_at          DateTime?   @db.Timestamp(6)
+  expire_date         DateTime    @default(now()) @db.Timestamp(6)
+  expire_date_display DateTime?   @db.Timestamp(6)
+  customer            customer    @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  course_item         course_item @relation(fields: [item_id], references: [course_item_id])
+  sale_order          sale_order  @relation(fields: [sale_order_id, branch_id], references: [sale_order_id, branch_id])
+
+  @@id([sale_order_id, branch_id, customer_id, item_id])
+  @@unique([customer_id, expire_date, item_id, branch_id])
+  @@index([customer_id, expire_date, item_id, branch_id])
+  @@index([customer_id, expire_date, branch_id])
+  @@index([expire_date, item_id])
+  @@index([customer_id, expire_date, item_id])
+  @@index([sale_order_id, branch_id, item_id])
+  @@index([clinic_id, branch_id])
+  @@index([sale_order_id, item_id])
+  @@index([expire_date_display])
+  @@index([item_id, expire_date, clinic_id])
+}
+
+model customer_course_usage_log {
+  id                String             @id @db.VarChar(50)
+  service_usage_id  String             @db.VarChar(50)
+  customer_id       String             @db.VarChar(50)
+  branch_id         String             @db.VarChar(50)
+  clinic_id         String             @db.VarChar(50)
+  item_id           String             @db.VarChar(50)
+  amount            Decimal?           @db.Decimal(10, 2)
+  status            usage_log_status
+  updated_at        DateTime?          @db.Timestamp(6)
+  created_at        DateTime?          @db.Timestamp(6)
+  expire_date       DateTime           @default(now()) @db.Timestamp(6)
+  course_usage_type course_usage_type? @default(SERVICE_USAGE)
+  customer          customer           @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  course_item       course_item        @relation(fields: [item_id], references: [course_item_id])
+
+  @@index([clinic_id, customer_id, expire_date, item_id])
+  @@index([clinic_id, branch_id])
+  @@index([service_usage_id, branch_id])
+  @@index([clinic_id])
+}
+
+model receive_order {
+  receive_order_id              String                 @db.VarChar(50)
+  branch_id                     String                 @db.VarChar(50)
+  purchase_order_id             String?                @db.VarChar(50)
+  distributor_id                String?                @db.VarChar(50)
+  receive_user_id               String?                @db.VarChar(50)
+  date                          DateTime?              @db.Timestamp(6)
+  remark                        String?
+  extra_remark                  String?
+  vat_type                      vat_type?
+  total                         Decimal?               @db.Decimal(10, 2)
+  discount                      Decimal                @db.Decimal(10, 2)
+  round_decimal                 Boolean?
+  net                           Decimal                @db.Decimal(10, 2)
+  created_by                    String                 @db.VarChar(50)
+  receive_order_status          receive_order_status
+  status                        record_status
+  updated_at                    DateTime?              @db.Timestamp(6)
+  created_at                    DateTime?              @db.Timestamp(6)
+  vat                           Decimal?               @db.Decimal(10, 2)
+  updated_by                    String?                @db.VarChar(50)
+  transfer_order_id             String?                @db.VarChar(50)
+  transfer_order_from_branch_id String?                @db.VarChar(50)
+  distributor                   distributor?           @relation(fields: [distributor_id], references: [distributor_id])
+  receive_user                  user?                  @relation(fields: [receive_user_id], references: [user_id])
+  transfer_order                transfer_order?        @relation(fields: [transfer_order_id, transfer_order_from_branch_id], references: [transfer_order_id, branch_id])
+  receive_order_item            receive_order_item[]
+  receive_order_receipt         receive_order_receipt?
+
+  @@id([receive_order_id, branch_id])
+}
+
+model receive_order_item {
+  receive_order_id String        @db.VarChar(50)
+  branch_id        String        @db.VarChar(50)
+  item_id          String        @db.VarChar(50)
+  lot_id           String        @db.VarChar(50)
+  price_per_unit   Decimal       @db.Decimal(10, 2)
+  item_name        String        @db.VarChar(250)
+  quantity         Decimal       @db.Decimal(10, 2)
+  price            Decimal       @db.Decimal(10, 2)
+  total            Decimal       @db.Decimal(10, 2)
+  updated_at       DateTime?     @db.Timestamp(6)
+  created_at       DateTime?     @db.Timestamp(6)
+  discount         Decimal?      @db.Decimal(10, 2)
+  vat              Decimal       @default(0) @db.Decimal(10, 2)
+  expire_date      DateTime      @default(now()) @db.Timestamp(6)
+  product          product       @relation(fields: [item_id], references: [product_id])
+  receive_order    receive_order @relation(fields: [receive_order_id, branch_id], references: [receive_order_id, branch_id])
+
+  @@id([receive_order_id, branch_id, item_id, lot_id])
+}
+
+model receive_order_receipt {
+  receive_order_id         String                @db.VarChar(50)
+  branch_id                String                @db.VarChar(50)
+  paid_amount              Decimal               @db.Decimal(10, 2)
+  payment_type             payment_type
+  purchase_by_user_id      String                @db.VarChar(50)
+  evidence                 String
+  payment_method_id        String                @db.VarChar(50)
+  remark                   String?
+  status                   record_status?
+  created_by               String                @db.VarChar(50)
+  date                     DateTime?             @db.Timestamp(6)
+  updated_at               DateTime?             @db.Timestamp(6)
+  created_at               DateTime?             @db.Timestamp(6)
+  receive_order_receipt_id String                @id @db.VarChar(50)
+  clinic_payment_method    clinic_payment_method @relation(fields: [payment_method_id], references: [clinic_payment_method_id])
+  receive_order            receive_order         @relation(fields: [receive_order_id, branch_id], references: [receive_order_id, branch_id])
+
+  @@unique([receive_order_id, branch_id])
+}
+
+model role {
+  role_id             role_enum            @id
+  role_description_TH String?              @db.VarChar(250)
+  role_description_EN String?              @db.VarChar(250)
+  status              record_status?
+  operable            Boolean?
+  updated_at          DateTime?            @db.Timestamp(6)
+  created_at          DateTime?            @db.Timestamp(6)
+  course_operator     course_operator[]
+  default_permission  default_permission[]
+  invite_user         invite_user[]
+  user_branch         user_branch[]
+}
+
+model sale_order {
+  sale_order_id                   String                            @db.VarChar(50)
+  branch_id                       String                            @db.VarChar(50)
+  clinic_id                       String                            @db.VarChar(50)
+  customer_id                     String                            @db.VarChar(50)
+  adviser                         String?                           @db.VarChar(250)
+  percent_commision               Decimal?                          @db.Decimal(10, 2)
+  voucher_id                      String?                           @db.VarChar(50)
+  total                           Decimal?                          @db.Decimal(10, 2)
+  promotion_discount              Decimal                           @db.Decimal(10, 2)
+  customer_discount               Decimal                           @db.Decimal(10, 2)
+  voucher_discount                Decimal                           @db.Decimal(10, 2)
+  extra_discount                  Decimal                           @db.Decimal(10, 2)
+  subtotal                        Decimal                           @db.Decimal(10, 2)
+  round_decimal                   Boolean?
+  totalDue                        Decimal                           @db.Decimal(10, 2)
+  remark                          String?
+  extra_remark                    String?
+  sale_order_status               sale_order_status
+  status                          record_status
+  date                            DateTime?                         @db.Timestamp(6)
+  created_by                      String                            @db.VarChar(50)
+  updated_at                      DateTime?                         @db.Timestamp(6)
+  created_at                      DateTime?                         @db.Timestamp(6)
+  sale_order_discount_request_id  String?                           @unique @db.VarChar(50)
+  updated_by                      String?                           @db.VarChar(50)
+  customer_coures                 customer_coures[]
+  prescription                    prescription[]
+  receipt                         receipt[]
+  branch                          branch                            @relation(fields: [branch_id], references: [branch_id])
+  seller                          user                              @relation(fields: [created_by], references: [user_id])
+  customer                        customer                          @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  sale_order_discount_request     sale_order_discount_request?      @relation(fields: [sale_order_discount_request_id], references: [id])
+  voucher_detail                  voucher?                          @relation(fields: [voucher_id, clinic_id], references: [voucher_code, clinic_id])
+  sale_order_document_signed      sale_order_document_signed[]
+  sale_order_item                 sale_order_item[]
+  sale_order_item_bundle_set_item sale_order_item_bundle_set_item[]
+  sale_receipt_commission         sale_receipt_commission[]
+  sale_user                       sale_user[]
+
+  @@id([sale_order_id, branch_id])
+  @@index([customer_id, clinic_id])
+  @@index([voucher_id, clinic_id])
+  @@index([branch_id])
+  @@index([sale_order_discount_request_id])
+  @@index([created_by])
+}
+
+model sale_order_discount_request {
+  id               String          @id @db.VarChar(50)
+  request_discount Decimal         @db.Decimal(10, 2)
+  approve_by       String?         @db.VarChar(50)
+  status           approved_status
+  updated_at       DateTime?       @db.Timestamp(6)
+  created_at       DateTime?       @db.Timestamp(6)
+  description      String?
+  reason           String?
+  request_by       String?         @db.VarChar(50)
+  sale_order       sale_order?
+  user             user?           @relation(fields: [approve_by], references: [user_id])
+
+  @@index([approve_by])
+}
+
+model sale_order_item {
+  sale_order_item_id              String                            @id @db.VarChar(50)
+  sale_order_id                   String                            @db.VarChar(50)
+  branch_id                       String                            @db.VarChar(50)
+  item_id                         String?                           @db.VarChar(50)
+  course_item_id                  String?                           @db.VarChar(50)
+  bundle_set_id                   String?                           @db.VarChar(50)
+  item_name                       String                            @db.VarChar(512)
+  is_free                         Boolean
+  price_per_unit                  Decimal                           @db.Decimal(10, 2)
+  quantity                        Decimal                           @db.Decimal(10, 2)
+  discount                        Decimal                           @db.Decimal(10, 2)
+  total                           Decimal                           @db.Decimal(10, 2)
+  net                             Decimal                           @db.Decimal(10, 2)
+  updated_at                      DateTime?                         @db.Timestamp(6)
+  created_at                      DateTime?                         @db.Timestamp(6)
+  lot_id                          String?
+  promotion_price                 Decimal                           @default(0) @db.Decimal(10, 2)
+  amount_per_course               Int?
+  bundle_set                      bundle_set?                       @relation(fields: [bundle_set_id], references: [bundle_set_id])
+  course_item                     course_item?                      @relation(fields: [course_item_id], references: [course_item_id])
+  product                         product?                          @relation(fields: [item_id], references: [product_id])
+  sale_order                      sale_order                        @relation(fields: [sale_order_id, branch_id], references: [sale_order_id, branch_id])
+  sale_order_item_bundle_set_item sale_order_item_bundle_set_item[]
+
+  @@index([course_item_id])
+  @@index([item_id])
+  @@index([sale_order_item_id])
+  @@index([bundle_set_id])
+  @@index([sale_order_id, branch_id])
+  @@index([sale_order_id, branch_id, course_item_id])
+  @@index([sale_order_id, branch_id, item_id])
+}
+
+model sale_order_item_bundle_set_item {
+  sale_order_item_id       String          @db.VarChar(50)
+  bundle_set_id            String          @db.VarChar(50)
+  lot_id                   String?         @db.VarChar(50)
+  quantity                 Decimal         @db.Decimal(10, 2)
+  price_per_unit           Decimal         @db.Decimal(10, 2)
+  updated_at               DateTime?       @db.Timestamp(6)
+  created_at               DateTime?       @db.Timestamp(6)
+  course_item_id           String?         @db.VarChar(50)
+  product_id               String?         @db.VarChar(50)
+  branch_id                String          @db.VarChar(50)
+  id                       String          @id @db.VarChar(50)
+  sale_order_id            String          @db.VarChar(50)
+  promotion_price_per_unit Decimal?        @db.Decimal(10, 2)
+  net                      Decimal?        @db.Decimal(10, 2)
+  amount_per_course        Int?
+  bundle_set               bundle_set      @relation(fields: [bundle_set_id], references: [bundle_set_id])
+  course_item              course_item?    @relation(fields: [course_item_id], references: [course_item_id])
+  product                  product?        @relation(fields: [product_id], references: [product_id])
+  sale_order               sale_order      @relation(fields: [sale_order_id, branch_id], references: [sale_order_id, branch_id])
+  sale_order_item          sale_order_item @relation(fields: [sale_order_item_id], references: [sale_order_item_id])
+
+  @@index([sale_order_item_id])
+  @@index([product_id])
+  @@index([course_item_id])
+  @@index([sale_order_id, branch_id])
+}
+
+model sale_order_document_signed {
+  sale_order_id    String           @db.VarChar(50)
+  doc_id           String           @db.VarChar(50)
+  branch_id        String           @db.VarChar(50)
+  status           signed_status
+  documents_signed documents_signed @relation(fields: [doc_id], references: [doc_id])
+  sale_order       sale_order       @relation(fields: [sale_order_id, branch_id], references: [sale_order_id, branch_id])
+
+  @@id([sale_order_id, branch_id, doc_id])
+  @@index([sale_order_id, branch_id])
+  @@index([doc_id])
+}
+
+model sale_user {
+  sale_user_id  String     @id @db.VarChar(50)
+  sale_order_id String     @db.VarChar(50)
+  branch_id     String     @db.VarChar(50)
+  user_id       String     @db.VarChar(50)
+  percent       Decimal?   @db.Decimal(10, 2)
+  sale_order    sale_order @relation(fields: [sale_order_id, branch_id], references: [sale_order_id, branch_id])
+  user          user       @relation(fields: [user_id], references: [user_id])
+}
+
+model service_usage {
+  service_usage_id             String                        @db.VarChar(50)
+  branch_id                    String                        @db.VarChar(50)
+  clinic_id                    String                        @db.VarChar(50)
+  customer_owner_id            String                        @db.VarChar(50)
+  customer_id                  String                        @db.VarChar(50)
+  remark                       String?
+  extra_remark                 String?
+  status                       record_status?
+  service_usage_status         service_usage_status?
+  date                         DateTime?                     @db.Timestamp(6)
+  created_by                   String                        @db.VarChar(50)
+  updated_at                   DateTime?                     @db.Timestamp(6)
+  created_at                   DateTime?                     @db.Timestamp(6)
+  document_url                 String?
+  updated_by                   String?                       @db.VarChar(50)
+  verify_at                    DateTime?                     @db.Timestamp(6)
+  verify_by                    String?                       @db.VarChar(50)
+  course_operator_user         course_operator_user[]
+  opd                          opd[]
+  use_branch                   branch                        @relation(fields: [branch_id], references: [branch_id])
+  user_create                  user                          @relation(fields: [created_by], references: [user_id])
+  customer                     customer                      @relation("service_usage", fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  customer_owner               customer                      @relation("service_usage_owner", fields: [customer_owner_id, clinic_id], references: [customer_id, clinic_id])
+  service_usage_item           service_usage_item[]
+  service_usage_request_cancel service_usage_request_cancel?
+
+  @@id([service_usage_id, branch_id])
+  @@index([customer_owner_id, clinic_id])
+  @@index([customer_id, clinic_id])
+  @@index([date])
+  @@index([branch_id, date])
+  @@index([service_usage_id])
+  @@index([branch_id])
+}
+
+model service_usage_item {
+  service_usage_item_id         String                          @id @db.VarChar(50)
+  service_usage_id              String?                         @db.VarChar(50)
+  branch_id                     String                          @db.VarChar(50)
+  course_id                     String?                         @db.VarChar(50)
+  item_id                       String?                         @db.VarChar(50)
+  item_name                     String                          @db.VarChar(512)
+  quantity                      Decimal?                        @db.Decimal(10, 2)
+  remark                        String?
+  updated_at                    DateTime?                       @db.Timestamp(6)
+  created_at                    DateTime?                       @db.Timestamp(6)
+  expire_date                   DateTime?                       @db.Timestamp(6)
+  lot_id                        String?
+  course_item                   course_item?                    @relation(fields: [course_id], references: [course_item_id])
+  product                       product?                        @relation(fields: [item_id], references: [product_id])
+  service_usage                 service_usage?                  @relation(fields: [service_usage_id, branch_id], references: [service_usage_id, branch_id])
+  service_usage_item_commission service_usage_item_commission[]
+  service_usage_item_product    service_usage_item_product[]
+
+  @@index([service_usage_id, branch_id])
+  @@index([course_id, expire_date])
+}
+
+model service_usage_item_commission {
+  service_usage_item_id String             @db.VarChar(50)
+  service_usage_id      String             @db.VarChar(50)
+  branch_id             String             @db.VarChar(50)
+  commission            Decimal            @db.Decimal(10, 2)
+  unit                  amount_unit
+  role                  role_enum
+  operator_type         operator_type
+  service_usage_item    service_usage_item @relation(fields: [service_usage_item_id], references: [service_usage_item_id])
+
+  @@id([service_usage_id, service_usage_item_id, role, operator_type])
+  @@index([service_usage_id, branch_id, role])
+  @@index([service_usage_item_id, branch_id, role])
+  @@index([service_usage_item_id])
+  @@index([service_usage_id, role])
+}
+
+model service_usage_item_product {
+  service_usage_item_id String             @db.VarChar(50)
+  service_usage_id      String             @db.VarChar(50)
+  branch_id             String             @db.VarChar(50)
+  item_id               String             @db.VarChar(50)
+  quantity              Decimal            @db.Decimal(10, 2)
+  lot_id                String?
+  id                    Int                @id @default(autoincrement())
+  item_detail           product            @relation(fields: [item_id], references: [product_id])
+  service_usage_item    service_usage_item @relation(fields: [service_usage_item_id], references: [service_usage_item_id])
+
+  @@index([service_usage_item_id])
+  @@index([item_id])
+}
+
+model sub_category {
+  sub_category_id      String                 @id @db.VarChar(50)
+  clinic_id            String                 @db.VarChar(50)
+  name                 String                 @db.VarChar(250)
+  product_category     all_product_category
+  updated_at           DateTime?              @db.Timestamp(6)
+  created_at           DateTime?              @db.Timestamp(6)
+  status               record_status          @default(ACTIVE)
+  code                 String?                @db.VarChar(50)
+  course               course[]
+  product              product[]
+  clinic               clinic                 @relation(fields: [clinic_id], references: [clinic_id])
+  voucher_sub_category voucher_sub_category[]
+}
+
+model subscription_plan {
+  plan_id                     String                        @id @db.VarChar(50)
+  plan_name_th                String                        @db.VarChar(200)
+  plan_name_en                String                        @db.VarChar(200)
+  price                       Decimal                       @db.Decimal(10, 4)
+  status                      record_status
+  updated_at                  DateTime?                     @db.Timestamp(6)
+  created_at                  DateTime?                     @db.Timestamp(6)
+  clinic_registration         clinic_registration[]
+  clinic_subscription         clinic_subscription[]
+  subscription_plan_condition subscription_plan_condition[]
+}
+
+model subscription_plan_condition {
+  subscription_plan_id String             @db.VarChar(50)
+  condition_id         String             @db.VarChar(200)
+  value                String             @db.VarChar(200)
+  operator             condition_operator
+  status_open          Boolean            @default(false)
+  updated_at           DateTime           @db.Timestamp(6)
+  created_at           DateTime           @db.Timestamp(6)
+  plan_condition       plan_condition     @relation(fields: [condition_id], references: [condition_id])
+  subscription_plan    subscription_plan  @relation(fields: [subscription_plan_id], references: [plan_id])
+
+  @@id([subscription_plan_id, condition_id])
+}
+
+model transfer_order {
+  transfer_order_id     String                @db.VarChar(50)
+  branch_id             String                @db.VarChar(50)
+  destination_branch_id String                @db.VarChar(50)
+  transfer_user_id      String?               @db.VarChar(50)
+  date                  DateTime?             @db.Timestamp(6)
+  remark                String?
+  extra_remark          String?
+  total                 Decimal?              @db.Decimal(10, 2)
+  net                   Decimal               @db.Decimal(10, 2)
+  created_by            String                @db.VarChar(50)
+  transfer_order_status transfer_order_status
+  status                record_status
+  updated_at            DateTime?             @db.Timestamp(6)
+  created_at            DateTime?             @db.Timestamp(6)
+  updated_by            String?               @db.VarChar(50)
+  is_cross_clinic       Boolean               @default(false)
+  receive_order         receive_order[]
+  destination_branch    branch                @relation(fields: [destination_branch_id], references: [branch_id])
+  transfer_user         user?                 @relation(fields: [transfer_user_id], references: [user_id])
+  transfer_order_item   transfer_order_item[]
+
+  @@id([transfer_order_id, branch_id])
+}
+
+model transfer_order_item {
+  transfer_order_id String         @db.VarChar(50)
+  branch_id         String         @db.VarChar(50)
+  item_id           String         @db.VarChar(50)
+  lot_id            String         @db.VarChar(50)
+  price_per_unit    Decimal        @db.Decimal(10, 2)
+  item_name         String         @db.VarChar(250)
+  quantity          Decimal        @db.Decimal(10, 2)
+  price             Decimal        @db.Decimal(10, 2)
+  total             Decimal        @db.Decimal(10, 2)
+  updated_at        DateTime?      @db.Timestamp(6)
+  created_at        DateTime?      @db.Timestamp(6)
+  vat_type          vat_type?
+  expire_date       DateTime       @default(now()) @db.Timestamp(6)
+  product           product        @relation(fields: [item_id], references: [product_id])
+  transfer_order    transfer_order @relation(fields: [transfer_order_id, branch_id], references: [transfer_order_id, branch_id])
+
+  @@id([transfer_order_id, branch_id, item_id, lot_id])
+}
+
+model user {
+  user_id                                 String                         @id @db.VarChar(50)
+  clinic_id                               String?                        @db.VarChar(50)
+  profile_image                           String?
+  title                                   String?                        @db.VarChar(50)
+  name                                    String?                        @db.VarChar(100)
+  lastname                                String?                        @db.VarChar(100)
+  email                                   String                         @db.VarChar(100)
+  tel                                     String?                        @db.VarChar(20)
+  hash_password                           String?                        @db.VarChar(255)
+  status                                  record_status?
+  nickname                                String?                        @db.VarChar(50)
+  address                                 String?                        @db.VarChar(250)
+  sub_district                            String?                        @db.VarChar(100)
+  district                                String?                        @db.VarChar(100)
+  province                                String?                        @db.VarChar(100)
+  postcode                                String?                        @db.VarChar(5)
+  updated_at                              DateTime?                      @db.Timestamp(6)
+  created_at                              DateTime?                      @db.Timestamp(6)
+  is_clinic_root_user                     Boolean                        @default(false)
+  employee_no                             String?                        @db.VarChar(100)
+  appointment_reminder                    appointment_reminder[]
+  course_operator_user                    course_operator_user[]
+  customer                                customer[]
+  customer_attendant                      customer_attendant[]
+  cashier_detail                          customer_wallet[]              @relation("cashier_detail")
+  create_customer_wallet                  customer_wallet[]              @relation("created_by_user")
+  customer_wallet                         customer_wallet[]              @relation("seller_detail_user")
+  inventory_log                           inventory_log[]
+  invite_user                             invite_user[]
+  opd                                     opd[]
+  operation_item                          operation_item[]
+  prescription                            prescription[]
+  purchase_order                          purchase_order[]
+  receipt                                 receipt[]
+  receive_order                           receive_order[]
+  sale_order                              sale_order[]
+  sale_order_discount_request             sale_order_discount_request[]
+  sale_target                             sale_target[]
+  sale_user                               sale_user[]
+  service_usage                           service_usage[]
+  service_usage_expiration                service_usage_expiration[]
+  service_usage_request_cancel_approve_by service_usage_request_cancel[] @relation("service_usage_request_cancel_approve_by")
+  service_usage_request_cancel_create_by  service_usage_request_cancel[] @relation("service_usage_request_cancel_create_by")
+  template_detail                         template_detail[]
+  transfer_order                          transfer_order[]
+  clinic                                  clinic?                        @relation(fields: [clinic_id], references: [clinic_id])
+  user_appointment                        user_appointment[]
+  user_branch                             user_branch[]
+  user_permission                         user_permission[]
+  work_schedule                           work_schedule[]
+}
+
+model user_branch {
+  user_id       String        @db.VarChar(50)
+  branch_id     String        @db.VarChar(50)
+  role_id       role_enum
+  discount      Decimal?      @db.Decimal(10, 2)
+  discount_unit discount_type @default(BATH)
+  updated_at    DateTime?     @db.Timestamp(6)
+  created_at    DateTime?     @db.Timestamp(6)
+  status        record_status @default(ACTIVE)
+  branch        branch        @relation(fields: [branch_id], references: [branch_id])
+  role          role          @relation(fields: [role_id], references: [role_id])
+  user          user          @relation(fields: [user_id], references: [user_id])
+
+  @@id([user_id, branch_id])
+}
+
+model user_permission {
+  branch_id       String     @db.VarChar(50)
+  user_id         String     @db.VarChar(50)
+  permission_id   String     @db.VarChar(50)
+  permission      Boolean?
+  updated_at      DateTime?  @db.Timestamp(6)
+  created_at      DateTime?  @db.Timestamp(6)
+  branch          branch     @relation(fields: [branch_id], references: [branch_id])
+  permission_info permission @relation(fields: [permission_id], references: [permission_id])
+  user            user       @relation(fields: [user_id], references: [user_id])
+
+  @@id([branch_id, user_id, permission_id])
+}
+
+model voucher_branch {
+  voucher_id String   @db.VarChar(50)
+  branch_id  String   @db.VarChar(50)
+  updated_at DateTime @db.Timestamp(6)
+  created_at DateTime @db.Timestamp(6)
+  voucher    voucher  @relation(fields: [voucher_id], references: [voucher_id])
+
+  @@id([voucher_id, branch_id])
+}
+
+model voucher_category {
+  voucher_id  String   @db.VarChar(50)
+  category_id String   @db.VarChar(50)
+  updated_at  DateTime @db.Timestamp(6)
+  created_at  DateTime @db.Timestamp(6)
+  category    category @relation(fields: [category_id], references: [category_id])
+  voucher     voucher  @relation(fields: [voucher_id], references: [voucher_id])
+
+  @@id([voucher_id, category_id])
+}
+
+model voucher_product {
+  voucher_id String    @db.VarChar(50)
+  item_id    String    @db.VarChar(50)
+  updated_at DateTime? @db.Timestamp(6)
+  created_at DateTime? @db.Timestamp(6)
+  product    product   @relation(fields: [item_id], references: [product_id])
+  voucher    voucher   @relation(fields: [voucher_id], references: [voucher_id])
+
+  @@id([voucher_id, item_id])
+}
+
+model voucher_course {
+  voucher_id String    @db.VarChar(50)
+  item_id    String    @db.VarChar(50)
+  updated_at DateTime? @db.Timestamp(6)
+  created_at DateTime? @db.Timestamp(6)
+  course     course    @relation(fields: [item_id], references: [course_id])
+  voucher    voucher   @relation(fields: [voucher_id], references: [voucher_id])
+
+  @@id([voucher_id, item_id])
+}
+
+model voucher_sub_category {
+  voucher_id      String       @db.VarChar(50)
+  sub_category_id String       @db.VarChar(50)
+  updated_at      DateTime?    @db.Timestamp(6)
+  created_at      DateTime?    @db.Timestamp(6)
+  sub_category    sub_category @relation(fields: [sub_category_id], references: [sub_category_id])
+  voucher         voucher      @relation(fields: [voucher_id], references: [voucher_id])
+
+  @@id([voucher_id, sub_category_id])
+}
+
+model invite_user {
+  id         String          @id @db.VarChar(50)
+  user_id    String          @db.VarChar(50)
+  branch_id  String          @db.VarChar(50)
+  role_id    role_enum
+  invite_by  String          @db.VarChar(50)
+  status     approved_status
+  updated_at DateTime?       @db.Timestamp(6)
+  created_at DateTime?       @db.Timestamp(6)
+  role       role            @relation(fields: [role_id], references: [role_id])
+  user       user            @relation(fields: [user_id], references: [user_id])
+}
+
+model work_schedule {
+  schedule_id String    @id @db.VarChar(50)
+  user_id     String    @db.VarChar(50)
+  branch_id   String?   @db.VarChar(50)
+  working_day String    @db.VarChar(50)
+  start_time  String    @db.VarChar(50)
+  end_time    String    @db.VarChar(50)
+  status      Boolean
+  updated_at  DateTime? @db.Timestamp(6)
+  created_at  DateTime? @db.Timestamp(6)
+  branch      branch?   @relation(fields: [branch_id], references: [branch_id])
+  user        user      @relation(fields: [user_id], references: [user_id])
+}
+
+model title {
+  id         String   @id @db.VarChar(50)
+  title_TH   String   @db.VarChar(100)
+  title_EN   String   @db.VarChar(100)
+  updated_at DateTime @db.Timestamp(6)
+  created_at DateTime @db.Timestamp(6)
+}
+
+model address {
+  id              String   @id @db.VarChar(50)
+  sub_district_TH String   @db.VarChar(100)
+  sub_district_EN String   @db.VarChar(100)
+  sub_district_id String   @db.VarChar(100)
+  district_TH     String   @db.VarChar(100)
+  district_EN     String   @db.VarChar(100)
+  district_id     String   @db.VarChar(100)
+  province_TH     String   @db.VarChar(100)
+  province_EN     String   @db.VarChar(100)
+  province_id     String   @db.VarChar(100)
+  postcode        String   @db.VarChar(5)
+  updated_at      DateTime @db.Timestamp(6)
+  created_at      DateTime @db.Timestamp(6)
+}
+
+model customer_registration {
+  regis_id              String          @id @db.VarChar(50)
+  branch_id             String          @db.VarChar(50)
+  clinic_id             String          @db.VarChar(50)
+  title                 String          @db.VarChar(30)
+  name                  String          @db.VarChar(100)
+  lastname              String          @db.VarChar(100)
+  nickname              String?         @db.VarChar(50)
+  gender                String          @db.VarChar(20)
+  birth_date            String?         @db.VarChar(50)
+  personal_id           String          @db.VarChar(20)
+  status_marry          String?         @db.VarChar(100)
+  address               String?         @db.VarChar(300)
+  sub_district          String?         @db.VarChar(200)
+  district              String?         @db.VarChar(200)
+  province              String?         @db.VarChar(200)
+  postcode              String?         @db.VarChar(50)
+  phone_number          String          @db.VarChar(15)
+  second_phone_number   String?         @db.VarChar(15)
+  email                 String?         @db.VarChar(200)
+  line_id               String?         @db.VarChar(250)
+  customer_image        String?
+  allergy               String?
+  surgery               String?
+  congenital_disease    String?
+  other_important       String?
+  weight                Decimal?        @default(0) @db.Decimal(10, 2)
+  height                Decimal?        @default(0) @db.Decimal(10, 2)
+  monthly_income        String?         @db.VarChar(100)
+  career                String?         @db.VarChar(200)
+  chanel                String?         @db.VarChar(200)
+  education             String?         @db.VarChar(200)
+  know_method           String?         @db.VarChar(300)
+  decide_come_here      String?         @db.VarChar(200)
+  social_media_frequent String?         @db.VarChar(50)
+  status                approved_status
+  updated_at            DateTime        @db.Timestamp(6)
+  created_at            DateTime        @db.Timestamp(6)
+  nationality           nationality     @default(THAI)
+  branch                branch          @relation(fields: [branch_id], references: [branch_id])
+  clinic                clinic          @relation(fields: [clinic_id], references: [clinic_id])
+}
+
+model customer_attendant {
+  user_id     String        @db.VarChar(50)
+  customer_id String        @db.VarChar(50)
+  branch_id   String        @db.VarChar(50)
+  clinic_id   String        @db.VarChar(50)
+  user_create String        @db.VarChar(50)
+  status      record_status @default(ACTIVE)
+  created_at  DateTime      @db.Timestamp(6)
+  branch      branch        @relation(fields: [branch_id], references: [branch_id])
+  customer    customer      @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  user        user          @relation(fields: [user_id], references: [user_id])
+
+  @@id([customer_id, branch_id, user_id])
+  @@index([customer_id, clinic_id])
+}
+
+model opd {
+  opd_id               String                 @db.VarChar(50)
+  branch_id            String                 @db.VarChar(50)
+  clinic_id            String                 @db.VarChar(50)
+  customer_id          String                 @db.VarChar(50)
+  user_create          String                 @db.VarChar(50)
+  remark               String?
+  otherRemark          String?
+  bt                   Decimal?               @default(0) @db.Decimal(10, 2)
+  bp                   Decimal?               @default(0) @db.Decimal(10, 2)
+  pr                   Decimal?               @default(0) @db.Decimal(10, 2)
+  rr                   Decimal?               @default(0) @db.Decimal(10, 2)
+  bmi                  Decimal?               @default(0) @db.Decimal(10, 2)
+  weight               Decimal?               @default(0) @db.Decimal(10, 2)
+  height               Decimal?               @default(0) @db.Decimal(10, 2)
+  chief_complaint      String?
+  diagnosis            String?                @db.VarChar(250)
+  details              String?
+  management_item      String?
+  management           String?
+  room                 String?
+  status_opd           opdStatus
+  opd_date             DateTime               @default(now()) @db.Timestamp(6)
+  updated_at           DateTime               @db.Timestamp(6)
+  created_at           DateTime               @db.Timestamp(6)
+  appointment          appointment[]
+  appointment_reminder appointment_reminder[]
+  branch               branch                 @relation(fields: [branch_id], references: [branch_id])
+  customer             customer               @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  service_usage        service_usage?         @relation(fields: [management_item, branch_id], references: [service_usage_id, branch_id])
+  examination_room     examination_room?      @relation(fields: [room], references: [room_id])
+  user                 user                   @relation(fields: [user_create], references: [user_id])
+  opd_image            opd_image[]
+  prescription         prescription[]
+
+  @@id([opd_id, branch_id])
+}
+
+model template_detail {
+  tmp_id          String        @id @db.VarChar(50)
+  clinic_id       String        @db.VarChar(50)
+  template_name   String
+  template_detail String
+  user_create     String        @db.VarChar(50)
+  status          record_status @default(ACTIVE)
+  type            typeTemplate
+  created_at      DateTime      @db.Timestamp(6)
+  clinic          clinic        @relation(fields: [clinic_id], references: [clinic_id])
+  user            user          @relation(fields: [user_create], references: [user_id])
+}
+
+model diagnosis_item {
+  id        String @id @db.VarChar(50)
+  clinic_id String @db.VarChar(50)
+  item      String
+  clinic    clinic @relation(fields: [clinic_id], references: [clinic_id])
+}
+
+model operation_item {
+  op_id                 String                  @id @db.VarChar(50)
+  branch_id             String                  @db.VarChar(50)
+  title                 String                  @db.VarChar(200)
+  operating_time        String
+  user_create           String                  @db.VarChar(50)
+  status                record_status           @default(ACTIVE)
+  created_at            DateTime                @db.Timestamp(6)
+  operation_appointment operation_appointment[]
+  branch                branch                  @relation(fields: [branch_id], references: [branch_id])
+  user                  user                    @relation(fields: [user_create], references: [user_id])
+}
+
+model sale_target {
+  id        String   @id @db.VarChar(50)
+  branch_id String   @db.VarChar(50)
+  clinic_id String   @db.VarChar(50)
+  user_id   String   @db.VarChar(50)
+  target    Decimal? @default(0) @db.Decimal(10, 2)
+  year      String   @db.VarChar(10)
+  branch    branch   @relation(fields: [branch_id], references: [branch_id])
+  user      user     @relation(fields: [user_id], references: [user_id])
+}
+
+model service_usage_request_cancel {
+  service_usage_id String                              @db.VarChar(50)
+  branch_id        String                              @db.VarChar(50)
+  reason_id        String                              @db.VarChar(50)
+  description      String?                             @db.VarChar(256)
+  status           approved_status
+  approve_by       String?                             @db.VarChar(50)
+  approve_at       DateTime?                           @db.Timestamp(6)
+  created_at       DateTime                            @db.Timestamp(6)
+  created_by       String                              @db.VarChar(50)
+  updated_at       DateTime                            @db.Timestamp(6)
+  aprrove_by_user  user?                               @relation("service_usage_request_cancel_approve_by", fields: [approve_by], references: [user_id])
+  branch           branch                              @relation(fields: [branch_id], references: [branch_id])
+  created_by_user  user                                @relation("service_usage_request_cancel_create_by", fields: [created_by], references: [user_id])
+  reason           service_usage_request_cancel_reason @relation(fields: [reason_id], references: [id])
+  service_usage    service_usage                       @relation(fields: [service_usage_id, branch_id], references: [service_usage_id, branch_id])
+
+  @@id([branch_id, service_usage_id])
+  @@unique([service_usage_id, branch_id])
+}
+
+model service_usage_request_cancel_reason {
+  id                           String                         @id @db.VarChar(50)
+  name_th                      String                         @db.VarChar(256)
+  name_en                      String                         @db.VarChar(256)
+  updated_at                   DateTime                       @db.Timestamp(6)
+  created_at                   DateTime                       @db.Timestamp(6)
+  service_usage_request_cancel service_usage_request_cancel[]
+}
+
+model clinic_to_clinic_transfer_white_list {
+  id             Int      @id @default(autoincrement())
+  src_clinic_id  String   @db.VarChar(50)
+  dest_clinic_id String   @db.VarChar(50)
+  updated_at     DateTime @db.Timestamp(6)
+  created_at     DateTime @db.Timestamp(6)
+  dest_clinic    clinic   @relation(fields: [dest_clinic_id], references: [clinic_id])
+}
+
+model service_usage_expiration {
+  service_usage_expiration_id     String                           @db.VarChar(50)
+  branch_id                       String                           @db.VarChar(50)
+  clinic_id                       String                           @db.VarChar(50)
+  customer_id                     String                           @db.VarChar(50)
+  remark                          String?
+  extra_remark                    String?
+  status                          record_status?
+  service_usage_expiration_status service_usage_expiration_status?
+  date                            DateTime?                        @db.Timestamp(6)
+  created_by                      String                           @db.VarChar(50)
+  updated_at                      DateTime?                        @db.Timestamp(6)
+  created_at                      DateTime?                        @db.Timestamp(6)
+  document_url                    String?
+  updated_by                      String?                          @db.VarChar(50)
+  verify_at                       DateTime?                        @db.Timestamp(6)
+  verify_by                       String?                          @db.VarChar(50)
+  use_branch                      branch                           @relation(fields: [branch_id], references: [branch_id])
+  user_create                     user                             @relation(fields: [created_by], references: [user_id])
+  customer                        customer                         @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  service_usage_expiration_item   service_usage_expiration_item[]
+
+  @@id([service_usage_expiration_id, branch_id])
+  @@index([customer_id, clinic_id])
+  @@index([date])
+  @@index([branch_id, date])
+  @@index([service_usage_expiration_id])
+  @@index([branch_id])
+}
+
+model service_usage_expiration_item {
+  service_usage_expiration_item_id String                    @id @db.VarChar(50)
+  service_usage_expiration_id      String?                   @db.VarChar(50)
+  branch_id                        String                    @db.VarChar(50)
+  course_id                        String?                   @db.VarChar(50)
+  item_name                        String                    @db.VarChar(250)
+  quantity                         Decimal?                  @db.Decimal(10, 2)
+  remark                           String?
+  expire_date                      DateTime?                 @db.Timestamp(6)
+  created_at                       DateTime?                 @db.Timestamp(6)
+  course_item                      course_item?              @relation(fields: [course_id], references: [course_item_id])
+  service_usage_expiration         service_usage_expiration? @relation(fields: [service_usage_expiration_id, branch_id], references: [service_usage_expiration_id, branch_id])
+
+  @@index([service_usage_expiration_id, branch_id])
+  @@index([course_id, expire_date])
+}
+
+model countries {
+  numeric_code Int      @id
+  alpha2       String   @unique @db.VarChar(2)
+  alpha3       String   @unique @db.VarChar(3)
+  name_en      String   @db.VarChar(200)
+  name_th      String   @db.VarChar(200)
+  created_at   DateTime @default(now())
+
+  @@map("countries")
+}
+
+model wellness_context {
+  wellness_context_id  String   @id @db.VarChar(50)
+  branch_id            String   @db.VarChar(50)
+  clinic_id            String   @db.VarChar(50)
+  customer_id          String   @db.VarChar(50)
+  intake_payload       String?
+  assessments_payload  String?
+  before_after_payload String?
+  consent_payload      String?
+  notes                String?
+  updated_at           DateTime @db.Timestamp(6)
+  created_at           DateTime @db.Timestamp(6)
+
+  @@unique([branch_id, clinic_id, customer_id], map: "wellness_context_unique")
+  @@index([branch_id])
+  @@index([customer_id, clinic_id])
+}
+
+// NEW (clinic-operations app): immutable audit trail for the Audit Log feature.
+// References to HealthX SaaS data are app-level string IDs only (no @relation /
+// no DB foreign key) so this table never alters existing tables.
+model audit_log {
+  audit_log_id         String             @id @default(uuid()) @db.Uuid
+  clinic_id            String             @db.VarChar(50)
+  branch_id            String             @db.VarChar(50)
+  reference_type       auditReferenceType
+  reference_id         String             @db.VarChar(50)
+  action               String             @db.VarChar(100)
+  action_label         String             @db.VarChar(200)
+  from_status          String?            @db.VarChar(100)
+  to_status            String?            @db.VarChar(100)
+  actor_user_id        String             @db.VarChar(50)
+  actor_name           String?            @db.VarChar(200)
+  actor_role           String?            @db.VarChar(50)
+  on_behalf_of_user_id String?            @db.VarChar(50)
+  on_behalf_of_name    String?            @db.VarChar(200)
+  duration_sec         Int?
+  notes                String?
+  reason               String?
+  ip_address           String?            @db.VarChar(64)
+  metadata             Json?
+  created_at           DateTime           @default(now()) @db.Timestamp(6)
+
+  @@index([clinic_id, branch_id])
+  @@index([reference_type, reference_id])
+  @@index([actor_user_id])
+  @@index([created_at])
+}
+
+enum auditReferenceType {
+  QUEUE
+  APPOINTMENT
+  OPD
+  CUSTOMER
+  SYSTEM
+}
+
+enum wallet_type {
+  BONUS
+  NORMAL
+}
+
+enum condition_wallet_enum {
+  AFTER_PAID_WITH_WALLET
+  AFTER_REDEEM
+}
+
+enum document_key {
+  CUSTOMER
+  OPD
+  WALLET
+  SALE_ORDER
+  RECEIVE_ORDER
+  TRANFER_ORDER
+  PURCHASE_ORDER
+  RECEIPT_PRODUCT
+  RECEIPT_WALLET
+  RECEIPT_RECEIVE_ORDER
+  SERVICE_USAGE
+  ADJUST_STOCK
+  CUT_STOCK
+  SERVICE_USAGE_EXPIRATION
+}
+
+enum inventory_log_type {
+  SYSTEM
+  USER
+}
+
+enum voucher_participate_type {
+  CATEGORY
+  SUB_CATEGORY
+  ITEM
+}
+
+enum usage_log_status {
+  RESERVED
+  USED
+}
+
+enum role_enum {
+  ADMIN
+  CLINIC_OWNER
+  MANAGER
+  DOCTOR
+  THERAPIST
+  NURSE
+  SALE
+  ACCOUNTANT
+  MAINTAINER
+  MARKETING
+  HR
+  PURCHASER
+  INVENTORY
+}
+
+enum signed_status {
+  SIGNED
+  UNSIGNED
+}
+
+enum record_status {
+  ACTIVE
+  INACTIVE
+  DELETED
+}
+
+enum receive_order_status {
+  PENDING
+  VERIFY
+}
+
+enum transfer_order_status {
+  PENDING
+  VERIFY
+}
+
+enum purchase_order_status {
+  PENDING
+  VERIFY
+}
+
+enum all_product_category {
+  COURSE
+  MEDICINE
+  DRUG
+  TOOL
+  PRODUCT
+  CONSUMABLES
+  BUNDLE_SET
+}
+
+enum amount_unit {
+  AMOUNT
+  PERCENT
+}
+
+enum approved_status {
+  APPROVED
+  PENDING
+  REJECTED
+}
+
+enum clinic_payment_type {
+  CASH
+  TRANSFER
+  CREDIT
+  WALLET
+}
+
+enum condition {
+  REVIEWED
+  FIRST_TIME
+}
+
+enum condition_operator {
+  gt
+  gte
+  eq
+  lte
+  lt
+}
+
+enum operator_type {
+  ASSISTANT
+  OPERATOR
+}
+
+enum payment_status {
+  UNPAID
+  PAID
+  REFUND
+}
+
+enum payment_type {
+  CASH
+  WALLET
+}
+
+enum product_category {
+  MEDICINE
+  DRUG
+  TOOL
+  PRODUCT
+  CONSUMABLES
+}
+
+enum product_type {
+  FREE
+  SALE
+  BOTH
+}
+
+enum registration_chanel {
+  ONLINE
+  OFFLINE
+}
+
+enum sale_order_status {
+  PENDING
+  PARTAIL
+  PAID
+  DELETED
+}
+
+enum service_usage_status {
+  APPROVED
+  PENDING
+  REJECTED
+}
+
+enum service_usage_expiration_status {
+  APPROVED
+  PENDING
+  REJECTED
+}
+
+enum type_condition_wallet {
+  BATH
+  PERCENT
+}
+
+enum discount_type {
+  BATH
+  PERCENT
+}
+
+enum commission_type {
+  BATH
+  PERCENT
+}
+
+enum vat_type {
+  INCLUDE_VAT
+  EXCLUDE_VAT
+  NO_VAT
+}
+
+enum voucher_type {
+  ALL_ITEM
+  SELECTED_ITEM
+}
+
+enum date_unit {
+  DAY
+  MONTH
+}
+
+enum format_type {
+  MONTH_YEAR
+  YEAR
+  CONTINUOUS
+  BRANCH_NO
+}
+
+enum document_type {
+  USER_ADD
+  SYSTEM_DEFAULT
+}
+
+enum document_status {
+  SIGNED
+  UNSIGNED
+  EXP
+}
+
+enum type_branch {
+  MASTER
+  NORMAL
+}
+
+enum opdStatus {
+  CANCEL
+  PENDING
+  SUCCESS
+}
+
+enum typeImageOpd {
+  BEFORE
+  AFTER
+}
+
+enum typeTemplate {
+  DETAIL
+  MANAGEMENT
+}
+
+enum statusPrescription {
+  SUCCESS
+  WAITING
+  CANCEL
+}
+
+enum statusAppointment {
+  APPOINT
+  CONFIRM
+  IN_SERVICE
+  SUCCESS
+  CANCEL
+}
+
+enum statusRemind {
+  WAIT
+  APPOINT
+  REPEAT
+  BUSY
+  LOSE_CONTACT
+}
+
+enum nationality {
+  THAI
+  FOREIGN
+}
+
+enum course_usage_type {
+  SERVICE_USAGE
+  SERVICE_USAGE_EXPIRE
+}
