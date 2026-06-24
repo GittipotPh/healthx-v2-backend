@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { AppointmentsRepository } from "./appointments.repository";
 import { type AppointmentView, toAppointmentView } from "./appointments.mapper";
 import type { QueryAppointmentsDto } from "./dto/query-appointments.dto";
+import type { RequestScope } from "../../auth/auth.types";
 
 export interface AppointmentListResult {
   items: AppointmentView[];
@@ -14,8 +15,8 @@ export interface AppointmentListResult {
 export class AppointmentsService {
   constructor(private readonly repository: AppointmentsRepository) {}
 
-  async list(query: QueryAppointmentsDto): Promise<AppointmentListResult> {
-    const result = await this.repository.findMany(query);
+  async list(query: QueryAppointmentsDto, scope: RequestScope): Promise<AppointmentListResult> {
+    const result = await this.repository.findMany(query, scope);
     return {
       items: result.items.map(toAppointmentView),
       total: result.total,

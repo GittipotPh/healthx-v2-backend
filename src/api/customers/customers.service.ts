@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { CustomersRepository } from "./customers.repository";
 import { type CustomerView, toCustomerView } from "./customers.mapper";
 import type { QueryCustomersDto } from "./dto/query-customers.dto";
+import type { RequestScope } from "../../auth/auth.types";
 
 export interface CustomerListResult {
   items: CustomerView[];
@@ -14,8 +15,8 @@ export interface CustomerListResult {
 export class CustomersService {
   constructor(private readonly repository: CustomersRepository) {}
 
-  async list(query: QueryCustomersDto): Promise<CustomerListResult> {
-    const result = await this.repository.findMany(query);
+  async list(query: QueryCustomersDto, scope: RequestScope): Promise<CustomerListResult> {
+    const result = await this.repository.findMany(query, scope);
     return {
       items: result.items.map(toCustomerView),
       total: result.total,

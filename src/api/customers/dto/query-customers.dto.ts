@@ -2,14 +2,6 @@ import { Type } from "class-transformer";
 import { IsBooleanString, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
 
 export class QueryCustomersDto {
-  @IsOptional()
-  @IsString()
-  clinicId?: string;
-
-  @IsOptional()
-  @IsString()
-  branchId?: string;
-
   /** Free-text search across name, lastname, nickname, phone, personal id. */
   @IsOptional()
   @IsString()

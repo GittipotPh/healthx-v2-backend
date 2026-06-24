@@ -16,14 +16,6 @@ import {
 export class TransitionQueueDto {
   @IsString()
   @MaxLength(50)
-  clinicId!: string;
-
-  @IsString()
-  @MaxLength(50)
-  branchId!: string;
-
-  @IsString()
-  @MaxLength(50)
   appointmentId!: string;
 
   /** Machine action key, e.g. "check-in", "send-to-consulting". */

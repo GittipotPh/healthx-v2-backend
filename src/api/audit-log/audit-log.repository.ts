@@ -3,6 +3,7 @@ import type { Prisma, audit_log } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import type { CreateAuditLogDto } from "./dto/create-audit-log.dto";
 import type { QueryAuditLogDto } from "./dto/query-audit-log.dto";
+import type { RequestScope } from "../../auth/auth.types";
 
 export interface PaginatedAuditLogs {
   items: audit_log[];
@@ -11,11 +12,20 @@ export interface PaginatedAuditLogs {
   pageSize: number;
 }
 
+/**
+ * Service-level input for writing an audit entry: the validated clinic/branch
+ * scope plus the client-supplied fields (HTTP DTO no longer carries the scope).
+ */
+export type AuditLogCreateInput = CreateAuditLogDto & {
+  clinicId: string;
+  branchId: string;
+};
+
 @Injectable()
 export class AuditLogRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateAuditLogDto): Promise<audit_log> {
+  async create(dto: AuditLogCreateInput): Promise<audit_log> {
     return this.prisma.audit_log.create({
       data: {
         clinic_id: dto.clinicId,
@@ -40,10 +50,10 @@ export class AuditLogRepository {
     });
   }
 
-  async findMany(query: QueryAuditLogDto): Promise<PaginatedAuditLogs> {
+  async findMany(query: QueryAuditLogDto, scope: RequestScope): Promise<PaginatedAuditLogs> {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
-    const where = this.buildWhere(query);
+    const where = this.buildWhere(query, scope);
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.audit_log.findMany({
@@ -58,11 +68,12 @@ export class AuditLogRepository {
     return { items, total, page, pageSize };
   }
 
-  private buildWhere(query: QueryAuditLogDto): Prisma.audit_logWhereInput {
-    const where: Prisma.audit_logWhereInput = {};
+  private buildWhere(query: QueryAuditLogDto, scope: RequestScope): Prisma.audit_logWhereInput {
+    const where: Prisma.audit_logWhereInput = {
+      clinic_id: scope.clinicId,
+      branch_id: scope.branchId,
+    };
 
-    if (query.clinicId) where.clinic_id = query.clinicId;
-    if (query.branchId) where.branch_id = query.branchId;
     if (query.referenceType) where.reference_type = query.referenceType;
     if (query.referenceId) where.reference_id = query.referenceId;
     if (query.actorUserId) where.actor_user_id = query.actorUserId;

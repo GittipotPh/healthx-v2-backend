@@ -4,14 +4,6 @@ import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
 
 export class QueryAuditLogDto {
   @IsOptional()
-  @IsString()
-  clinicId?: string;
-
-  @IsOptional()
-  @IsString()
-  branchId?: string;
-
-  @IsOptional()
   @IsEnum(auditReferenceType)
   referenceType?: auditReferenceType;
 

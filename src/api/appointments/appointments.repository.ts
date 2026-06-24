@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import type { AppointmentWithCustomer } from "./appointments.mapper";
 import type { QueryAppointmentsDto } from "./dto/query-appointments.dto";
+import type { RequestScope } from "../../auth/auth.types";
 
 export interface PaginatedAppointments {
   items: AppointmentWithCustomer[];
@@ -15,10 +16,13 @@ export interface PaginatedAppointments {
 export class AppointmentsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findMany(query: QueryAppointmentsDto): Promise<PaginatedAppointments> {
+  async findMany(
+    query: QueryAppointmentsDto,
+    scope: RequestScope,
+  ): Promise<PaginatedAppointments> {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 100;
-    const where = this.buildWhere(query);
+    const where = this.buildWhere(query, scope);
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.appointment.findMany({
@@ -34,11 +38,12 @@ export class AppointmentsRepository {
     return { items, total, page, pageSize };
   }
 
-  buildWhere(query: QueryAppointmentsDto): Prisma.appointmentWhereInput {
-    const where: Prisma.appointmentWhereInput = {};
+  buildWhere(query: QueryAppointmentsDto, scope: RequestScope): Prisma.appointmentWhereInput {
+    const where: Prisma.appointmentWhereInput = {
+      clinic_id: scope.clinicId,
+      branch_id: scope.branchId,
+    };
 
-    if (query.clinicId) where.clinic_id = query.clinicId;
-    if (query.branchId) where.branch_id = query.branchId;
     if (query.customerId) where.customer_id = query.customerId;
     if (query.status) where.status_appointment = query.status;
 

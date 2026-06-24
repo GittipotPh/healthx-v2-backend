@@ -1,8 +1,10 @@
 import { ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
+import cookieParser from "cookie-parser";
 import { AppModule } from "./app.module";
 import { ResponseInterceptor } from "./common/interceptors/response.interceptor";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
+import { allowedOrigins } from "./common/origins";
 
 // Load .env into process.env (Node >= 22) before anything reads it.
 try {
@@ -15,6 +17,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
 
   app.setGlobalPrefix("api/v1");
+  app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -25,8 +28,8 @@ async function bootstrap(): Promise<void> {
   app.useGlobalInterceptors(new ResponseInterceptor());
   app.useGlobalFilters(new AllExceptionsFilter());
 
-  const webOrigin = process.env.WEB_BASE_URL ?? "http://localhost:3000";
-  app.enableCors({ origin: webOrigin, credentials: true });
+  // Cookie auth requires explicit origins (never `*`) and credentialed requests.
+  app.enableCors({ origin: allowedOrigins(), credentials: true });
 
   const port = Number(process.env.APP_PORT ?? 8080);
   await app.listen(port);

@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import type { Prisma, customer } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import type { QueryCustomersDto } from "./dto/query-customers.dto";
+import type { RequestScope } from "../../auth/auth.types";
 
 export interface PaginatedCustomers {
   items: customer[];
@@ -14,10 +15,10 @@ export interface PaginatedCustomers {
 export class CustomersRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findMany(query: QueryCustomersDto): Promise<PaginatedCustomers> {
+  async findMany(query: QueryCustomersDto, scope: RequestScope): Promise<PaginatedCustomers> {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
-    const where = this.buildWhere(query);
+    const where = this.buildWhere(query, scope);
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.customer.findMany({
@@ -38,11 +39,10 @@ export class CustomersRepository {
     });
   }
 
-  private buildWhere(query: QueryCustomersDto): Prisma.customerWhereInput {
-    const where: Prisma.customerWhereInput = {};
+  private buildWhere(query: QueryCustomersDto, scope: RequestScope): Prisma.customerWhereInput {
+    // Customers are clinic-wide; we deliberately do not filter by branch here.
+    const where: Prisma.customerWhereInput = { clinic_id: scope.clinicId };
 
-    if (query.clinicId) where.clinic_id = query.clinicId;
-    if (query.branchId) where.branch_id = query.branchId;
     if (query.vip === "true") where.status_vip = true;
     if (query.vip === "false") where.status_vip = false;
 

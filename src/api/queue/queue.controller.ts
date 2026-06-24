@@ -6,18 +6,23 @@ import {
 } from "./queue.service";
 import { QueryQueueDto } from "./dto/query-queue.dto";
 import { TransitionQueueDto } from "./dto/transition-queue.dto";
+import { Scope } from "../../auth/scope.decorator";
+import type { RequestScope } from "../../auth/auth.types";
 
 @Controller("clinic/queue")
 export class QueueController {
   constructor(private readonly queueService: QueueService) {}
 
   @Get("today")
-  today(@Query() query: QueryQueueDto): Promise<QueueTodayResult> {
-    return this.queueService.today(query);
+  today(@Query() query: QueryQueueDto, @Scope() scope: RequestScope): Promise<QueueTodayResult> {
+    return this.queueService.today(query, scope);
   }
 
   @Post("transition")
-  transition(@Body() dto: TransitionQueueDto): Promise<QueueTransitionResult> {
-    return this.queueService.transition(dto);
+  transition(
+    @Body() dto: TransitionQueueDto,
+    @Scope() scope: RequestScope,
+  ): Promise<QueueTransitionResult> {
+    return this.queueService.transition(dto, scope);
   }
 }

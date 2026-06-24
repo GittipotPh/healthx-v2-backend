@@ -5,14 +5,6 @@ import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
 export class QueryOpdDto {
   @IsOptional()
   @IsString()
-  clinicId?: string;
-
-  @IsOptional()
-  @IsString()
-  branchId?: string;
-
-  @IsOptional()
-  @IsString()
   customerId?: string;
 
   @IsOptional()

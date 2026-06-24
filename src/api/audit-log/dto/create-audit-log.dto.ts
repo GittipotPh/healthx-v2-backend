@@ -10,14 +10,6 @@ import {
 } from "class-validator";
 
 export class CreateAuditLogDto {
-  @IsString()
-  @MaxLength(50)
-  clinicId!: string;
-
-  @IsString()
-  @MaxLength(50)
-  branchId!: string;
-
   @IsEnum(auditReferenceType)
   referenceType!: auditReferenceType;
 

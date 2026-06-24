@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { OpdRepository } from "./opd.repository";
 import { type OpdView, toOpdView } from "./opd.mapper";
 import type { QueryOpdDto } from "./dto/query-opd.dto";
+import type { RequestScope } from "../../auth/auth.types";
 
 export interface OpdListResult {
   items: OpdView[];
@@ -14,8 +15,8 @@ export interface OpdListResult {
 export class OpdService {
   constructor(private readonly repository: OpdRepository) {}
 
-  async list(query: QueryOpdDto): Promise<OpdListResult> {
-    const result = await this.repository.findMany(query);
+  async list(query: QueryOpdDto, scope: RequestScope): Promise<OpdListResult> {
+    const result = await this.repository.findMany(query, scope);
     return {
       items: result.items.map(toOpdView),
       total: result.total,

@@ -6,6 +6,7 @@ import { QueueRepository } from "./queue.repository";
 import { type QueueItemView, toQueueItemView } from "./queue.mapper";
 import type { QueryQueueDto } from "./dto/query-queue.dto";
 import type { TransitionQueueDto } from "./dto/transition-queue.dto";
+import type { RequestScope } from "../../auth/auth.types";
 
 export interface QueueTodayResult {
   date: string;
@@ -24,16 +25,16 @@ export class QueueService {
     private readonly auditLogService: AuditLogService,
   ) {}
 
-  async today(query: QueryQueueDto): Promise<QueueTodayResult> {
+  async today(query: QueryQueueDto, scope: RequestScope): Promise<QueueTodayResult> {
     const date = query.date ?? new Date().toISOString().slice(0, 10);
-    const rows = await this.repository.findTodayQueue(query.clinicId, query.branchId, date);
+    const rows = await this.repository.findTodayQueue(scope.clinicId, scope.branchId, date);
     return { date, items: rows.map((row, index) => toQueueItemView(row, index)) };
   }
 
-  async transition(dto: TransitionQueueDto): Promise<QueueTransitionResult> {
+  async transition(dto: TransitionQueueDto, scope: RequestScope): Promise<QueueTransitionResult> {
     const appointment = await this.repository.findAppointment(
-      dto.clinicId,
-      dto.branchId,
+      scope.clinicId,
+      scope.branchId,
       dto.appointmentId,
     );
     if (!appointment) {
@@ -45,8 +46,8 @@ export class QueueService {
     }
 
     const audit = await this.auditLogService.create({
-      clinicId: dto.clinicId,
-      branchId: dto.branchId,
+      clinicId: scope.clinicId,
+      branchId: scope.branchId,
       referenceType: auditReferenceType.QUEUE,
       referenceId: dto.appointmentId,
       action: dto.action,
