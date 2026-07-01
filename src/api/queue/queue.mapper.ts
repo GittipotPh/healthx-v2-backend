@@ -1,7 +1,7 @@
-import type { appointment, customer, opd, statusAppointment } from "@prisma/client";
+import type { appointment, customer, customer_info, opd, statusAppointment } from "@prisma/client";
 
 export type AppointmentForQueue = appointment & {
-  customer?: customer | null;
+  customer?: (customer & { customer_info?: customer_info | null }) | null;
   opd?: opd | null;
 };
 
@@ -30,6 +30,11 @@ export interface QueueItemView {
   opdStatus: string | null;
   isConsult: boolean;
   applyAnesthetic: boolean;
+  allergies: string[];
+  appointmentDetail: string | null;
+  cancelHistory: number;
+  lateHistory: number;
+  rescheduleHistory: number;
 }
 
 function deriveStatus(status: statusAppointment): QueueStatus {
@@ -48,9 +53,18 @@ function deriveStatus(status: statusAppointment): QueueStatus {
   }
 }
 
-export function toQueueItemView(row: AppointmentForQueue, index: number): QueueItemView {
+export function toQueueItemView(
+  row: AppointmentForQueue,
+  index: number,
+  history?: { cancelHistory: number; lateHistory: number; rescheduleHistory: number }
+): QueueItemView {
   const name = row.customer ? `${row.customer.name} ${row.customer.lastname}`.trim() : null;
   const queueNo = `Q${String(index + 1).padStart(3, "0")}`;
+
+  const rawAllergies = row.customer?.customer_info?.allergy;
+  const allergies = rawAllergies
+    ? rawAllergies.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
 
   return {
     id: row.appointment_id,
@@ -70,5 +84,10 @@ export function toQueueItemView(row: AppointmentForQueue, index: number): QueueI
     opdStatus: row.opd ? row.opd.status_opd : null,
     isConsult: row.is_consult,
     applyAnesthetic: row.apply_anesthetic,
+    allergies,
+    appointmentDetail: row.appointment_detail,
+    cancelHistory: history?.cancelHistory ?? 0,
+    lateHistory: history?.lateHistory ?? 0,
+    rescheduleHistory: history?.rescheduleHistory ?? 0,
   };
 }

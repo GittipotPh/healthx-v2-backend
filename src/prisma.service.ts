@@ -1,6 +1,11 @@
-import { Injectable, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import {
+  Injectable,
+  type OnModuleDestroy,
+  type OnModuleInit,
+} from "@nestjs/common";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { backendEnv } from "./env";
 
 /**
  * HealthX (public schema) Prisma client.
@@ -10,12 +15,12 @@ import { PrismaPg } from "@prisma/adapter-pg";
  * (appointment / opd / customer) and the new audit_log table for the clinic app.
  */
 @Injectable()
-export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+export class PrismaService
+  extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy
+{
   constructor() {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      throw new Error("DATABASE_URL is not set");
-    }
+    const connectionString = backendEnv().DATABASE_URL;
     super({ adapter: new PrismaPg({ connectionString }) });
   }
 

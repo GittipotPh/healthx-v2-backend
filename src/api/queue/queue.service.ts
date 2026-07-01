@@ -28,7 +28,15 @@ export class QueueService {
   async today(query: QueryQueueDto, scope: RequestScope): Promise<QueueTodayResult> {
     const date = query.date ?? new Date().toISOString().slice(0, 10);
     const rows = await this.repository.findTodayQueue(scope.clinicId, scope.branchId, date);
-    return { date, items: rows.map((row, index) => toQueueItemView(row, index)) };
+    const customerIds = Array.from(new Set(rows.map((row) => row.customer_id)));
+    const histories = await this.repository.findCustomersHistories(customerIds);
+    return {
+      date,
+      items: rows.map((row, index) => {
+        const history = histories[row.customer_id];
+        return toQueueItemView(row, index, history);
+      }),
+    };
   }
 
   async transition(dto: TransitionQueueDto, scope: RequestScope): Promise<QueueTransitionResult> {

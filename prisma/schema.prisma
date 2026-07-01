@@ -2012,9 +2012,6 @@ model wellness_context {
   @@index([customer_id, clinic_id])
 }
 
-// NEW (clinic-operations app): immutable audit trail for the Audit Log feature.
-// References to HealthX SaaS data are app-level string IDs only (no @relation /
-// no DB foreign key) so this table never alters existing tables.
 model audit_log {
   audit_log_id         String             @id @default(uuid()) @db.Uuid
   clinic_id            String             @db.VarChar(50)

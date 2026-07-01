@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+dist
+node_modules
+coverage
+npm-debug.log*
+pnpm-debug.log*
+Dockerfile

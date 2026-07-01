@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import type { audit_log } from "@prisma/client";
+import { auditReferenceType, type audit_log } from "@prisma/client";
 import {
   AuditLogRepository,
   type AuditLogCreateInput,
@@ -31,6 +31,29 @@ export class AuditLogService {
 
   async create(input: AuditLogCreateInput): Promise<AuditLogView> {
     const created = await this.repository.create(input);
+    return toAuditLogView(created);
+  }
+
+  /**
+   * Records a LOGIN audit entry against the branch the user has just entered.
+   * Called once on branch entry (after login → clinic → branch), so the login
+   * is attributed to a real clinic+branch the branch-scoped audit list can show.
+   */
+  async recordLogin(scope: RequestScope, ipAddress?: string): Promise<AuditLogView> {
+    const actorName = await this.repository.findActorName(scope.userId);
+    const created = await this.repository.create({
+      clinicId: scope.clinicId,
+      branchId: scope.branchId,
+      referenceType: auditReferenceType.SYSTEM,
+      referenceId: scope.userId,
+      action: "LOGIN",
+      actionLabel: "เข้าสู่ระบบ",
+      actorUserId: scope.userId,
+      actorName: actorName ?? undefined,
+      actorRole: scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined),
+      ipAddress,
+      notes: `${actorName ?? scope.userId} เข้าสู่ระบบสำเร็จ`,
+    });
     return toAuditLogView(created);
   }
 

@@ -1,10 +1,25 @@
-import { authCookieOptions, AUTH_COOKIE_NAME, clearAuthCookie, setAuthCookie } from "./auth.cookie";
+import {
+  authCookieOptions,
+  AUTH_COOKIE_NAME,
+  clearAuthCookie,
+  refreshTtlSeconds,
+  setAuthCookie,
+} from "./auth.cookie";
+import { resetBackendEnvForTest } from "../env";
 
 describe("auth cookie", () => {
   const ORIGINAL_ENV = { ...process.env };
 
+  beforeEach(() => {
+    process.env.DATABASE_URL =
+      "postgresql://user:pass@localhost:5432/healthx_test";
+    process.env.JWT_SECRET = "test-secret-that-is-at-least-32-characters";
+    resetBackendEnvForTest();
+  });
+
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
+    resetBackendEnvForTest();
   });
 
   it("is HttpOnly, SameSite=Lax, path=/ and not secure in dev", () => {
@@ -21,6 +36,8 @@ describe("auth cookie", () => {
   it("is secure and domain-scoped in production", () => {
     process.env.NODE_ENV = "production";
     process.env.AUTH_COOKIE_DOMAIN = ".healthx-pro.com";
+    process.env.CORS_ORIGINS = "https://app.healthx-pro.com";
+    resetBackendEnvForTest();
     const options = authCookieOptions();
     expect(options.secure).toBe(true);
     expect(options.domain).toBe(".healthx-pro.com");
@@ -35,7 +52,14 @@ describe("auth cookie", () => {
     expect(cookie).toHaveBeenCalledWith(
       AUTH_COOKIE_NAME,
       "tok123",
-      expect.objectContaining({ httpOnly: true, sameSite: "lax", path: "/", maxAge: 12 * 60 * 60 * 1000 }),
+      expect.objectContaining({
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        // Cookie is durable transport; freshness comes from the JWT exp, so its
+        // maxAge tracks the refresh lifetime (not the short access TTL).
+        maxAge: refreshTtlSeconds() * 1000,
+      }),
     );
 
     clearAuthCookie(res);

@@ -84,6 +84,19 @@ app.setGlobalPrefix("api/v1")
 @Controller("clinic/<resource>")   // → /api/v1/clinic/<resource>
 ```
 
+## Deployment DNS
+
+Use environment variables/Terraform inputs for DNS. Known stage mapping:
+
+```txt
+dev:        app https://app-dev.healthx-pro.com  | api https://api-dev.healthx-pro.com/api/v1
+production: app https://app.healthx-pro.com      | api https://api.healthx-pro.com/api/v1
+```
+
+Backend CORS/origin env should point to the matching app host:
+`WEB_BASE_URL` / `CORS_ORIGINS`. Prefer host-only API cookies; avoid a shared
+`.healthx-pro.com` cookie domain unless dev/prod cookie isolation is handled.
+
 ## Audit Logs
 
 The Audit Log feature stores entries in `public.audit_log`. Create an entry on

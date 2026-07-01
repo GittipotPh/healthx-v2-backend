@@ -25,6 +25,16 @@ export type AuditLogCreateInput = CreateAuditLogDto & {
 export class AuditLogRepository {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Display name for an actor, falling back to their email, for audit rows. */
+  async findActorName(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { user_id: userId },
+      select: { name: true, lastname: true, email: true },
+    });
+    if (!user) return null;
+    return `${user.name ?? ""} ${user.lastname ?? ""}`.trim() || user.email;
+  }
+
   async create(dto: AuditLogCreateInput): Promise<audit_log> {
     return this.prisma.audit_log.create({
       data: {

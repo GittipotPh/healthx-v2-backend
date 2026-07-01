@@ -80,6 +80,49 @@ WEB_BASE_URL=http://localhost:3000
 `process.loadEnvFile()` in `main.ts` and `prisma.config.ts`. Do not use production
 URLs for local experiments.
 
+## Deployment DNS / Environment Names
+
+HealthX has separate dev and production app/API hostnames. Keep these values in
+environment variables and Terraform inputs; do not hard-code them in source code
+or tests except as documented fixtures.
+
+```txt
+dev:
+  frontend app: https://app-dev.healthx-pro.com
+  backend API:  https://api-dev.healthx-pro.com/api/v1
+
+production:
+  frontend app: https://app.healthx-pro.com
+  backend API:  https://api.healthx-pro.com/api/v1
+```
+
+Backend environment mapping:
+
+```env
+# dev
+WEB_BASE_URL=https://app-dev.healthx-pro.com
+CORS_ORIGINS=https://app-dev.healthx-pro.com
+
+# production
+WEB_BASE_URL=https://app.healthx-pro.com
+CORS_ORIGINS=https://app.healthx-pro.com
+```
+
+Frontend environment mapping:
+
+```env
+# dev
+NEXT_PUBLIC_API_BASE_URL=https://api-dev.healthx-pro.com/api/v1
+
+# production
+NEXT_PUBLIC_API_BASE_URL=https://api.healthx-pro.com/api/v1
+```
+
+Cookie note: prefer host-only auth cookies on the API host. Be careful with
+`AUTH_COOKIE_DOMAIN=.healthx-pro.com` because the shared `hx_token` / `hx_refresh`
+cookie names could collide between dev and production subdomains unless cookie
+names or domains are environment-isolated.
+
 ## Applying a new table (safe flow)
 
 Local/test database only. Never alter existing tables; never `db push`.
@@ -172,48 +215,48 @@ src/modules/leads/
 
 Controllers should:
 
-* Handle routing only.
-* Use DTOs for request validation.
-* Call services.
-* Return consistent response contracts.
-* Not contain database query logic.
-* Not contain business-heavy logic.
+- Handle routing only.
+- Use DTOs for request validation.
+- Call services.
+- Return consistent response contracts.
+- Not contain database query logic.
+- Not contain business-heavy logic.
 
 ## Service Rules
 
 Services should:
 
-* Own business logic.
-* Coordinate repositories and external APIs.
-* Enforce data boundary rules.
-* Create audit logs for important changes.
-* Avoid direct Prisma usage if a repository layer exists.
-* Avoid returning raw Prisma objects if API DTO shape differs.
+- Own business logic.
+- Coordinate repositories and external APIs.
+- Enforce data boundary rules.
+- Create audit logs for important changes.
+- Avoid direct Prisma usage if a repository layer exists.
+- Avoid returning raw Prisma objects if API DTO shape differs.
 
 ## Repository Rules
 
 Repositories should:
 
-* Contain Prisma queries.
-* Be feature-scoped.
-* Avoid business logic.
-* Use typed query inputs and typed return values.
-* Never write to HealthX SaaS source tables unless explicitly approved.
+- Contain Prisma queries.
+- Be feature-scoped.
+- Avoid business logic.
+- Use typed query inputs and typed return values.
+- Never write to HealthX SaaS source tables unless explicitly approved.
 
 ## DTO and Validation Rules
 
-Use DTOs with class-validator/class-transformer if this is the existing project convention. 
+Use DTOs with class-validator/class-transformer if this is the existing project convention.
 
 Align and validate backend schema rules with frontend definitions (e.g. React Hook Form combined with Zod Schema Validation) for forms, API queryparams, and payloads.
 
 DTOs should validate:
 
-* required fields
-* enum fields
-* UUID fields for Backoffice IDs
-* string ID fields for HealthX references
-* pagination parameters
-* search/filter parameters
+- required fields
+- enum fields
+- UUID fields for Backoffice IDs
+- string ID fields for HealthX references
+- pagination parameters
+- search/filter parameters
 
 Do not accept `any`.
 
@@ -223,14 +266,14 @@ Do not pass raw request bodies directly into Prisma.
 
 All APIs must return a consistent response shape wrapped globally by `CustomResponseInterceptor` and `CustomExceptionFilter`.
 
-* **Success Responses**: Must always be structured as:
+- **Success Responses**: Must always be structured as:
   ```json
   {
     "status": "0000",
     "data": ...
   }
   ```
-* **Error/Exception Responses**: Must always be structured as:
+- **Error/Exception Responses**: Must always be structured as:
   ```json
   {
     "status": "8999" (GENERIC_ERROR) or "9999" (TECHNICAL_ERROR),
@@ -240,23 +283,23 @@ All APIs must return a consistent response shape wrapped globally by `CustomResp
 
 ## Logging Rules
 
-* All application logs, request logs, and runtime exceptions must be handled through the globally configured `nestjs-pino` Logger (`pino` engine) to produce consistent structured logs. Do not print plain logs or bypass NestJS Logger.
+- All application logs, request logs, and runtime exceptions must be handled through the globally configured `nestjs-pino` Logger (`pino` engine) to produce consistent structured logs. Do not print plain logs or bypass NestJS Logger.
 
 ## TypeScript Rules
 
-* No `any`. Never use `any` in function parameters, return types, class fields, or variable declarations where a strict type can be defined.
-* No unsafe casts.
-* Use strict DTOs and domain types.
-* Prefer explicit return types for public methods.
-* Do not suppress TypeScript errors.
-* Do not use `// @ts-ignore`.
+- No `any`. Never use `any` in function parameters, return types, class fields, or variable declarations where a strict type can be defined.
+- No unsafe casts.
+- Use strict DTOs and domain types.
+- Prefer explicit return types for public methods.
+- Do not suppress TypeScript errors.
+- Do not use `// @ts-ignore`.
 
 ## API Namespace Rules
 
 The NestJS app uses a global prefix such as:
 
 ```ts
-app.setGlobalPrefix("/api/v1")
+app.setGlobalPrefix("/api/v1");
 ```
 
 Clinic controllers use:
@@ -289,21 +332,21 @@ The five feature modules under `src/api/`:
 
 Create an `audit_log` entry for clinic status transitions and important actions:
 
-* queue status transitions (check-in, send-to-consulting, payment, complete, etc.)
-* OPD record status changes
-* appointment confirm / reschedule / cancel
-* customer create / approve / status change
+- queue status transitions (check-in, send-to-consulting, payment, complete, etc.)
+- OPD record status changes
+- appointment confirm / reschedule / cancel
+- customer create / approve / status change
 
 Use `AuditLogService.create` (surfaces errors) or `.record` (non-fatal background
 logging). Reference HealthX rows by `reference_type` + `reference_id`.
 
 ## Security Rules
 
-* Do not expose internal DB IDs unnecessarily.
-* Do not log sensitive payloads.
-* Do not expose patient medical details in Backoffice unless explicitly required and authorized.
-* Do not return full HealthX customer/OPD records unless a specific permission exists.
-* Prefer minimal lookup data for HealthX references, such as clinic name, branch name, user display name, and customer display name.
+- Do not expose internal DB IDs unnecessarily.
+- Do not log sensitive payloads.
+- Do not expose patient medical details in Backoffice unless explicitly required and authorized.
+- Do not return full HealthX customer/OPD records unless a specific permission exists.
+- Prefer minimal lookup data for HealthX references, such as clinic name, branch name, user display name, and customer display name.
 
 ## Testing Rules
 
@@ -311,12 +354,12 @@ When adding or refactoring backend code, add tests if the project already has te
 
 Prioritize tests for:
 
-* service business logic
-* repository query behavior where practical
-* DTO validation
-* assignment rules
-* status transitions
-* response contract
+- service business logic
+- repository query behavior where practical
+- DTO validation
+- assignment rules
+- status transitions
+- response contract
 
 ## Validation Commands
 

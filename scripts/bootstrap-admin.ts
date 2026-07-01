@@ -2,14 +2,15 @@
  * One-off: bootstrap a test ADMIN user for local e2e against healthx_optionb_test.
  *
  * - Picks an ACTIVE clinic that has at least one ACTIVE branch.
- * - Upserts a `user` row (email + MD5 password, ACTIVE, is_clinic_root_user=true).
+ * - Upserts a `user` row (email + Argon2 password, ACTIVE, is_clinic_root_user=true).
  * - Grants ADMIN role on every ACTIVE branch of that clinic via `user_branch`.
  *
  * Idempotent: re-running updates the same user (matched by email + clinic) and
  * re-asserts the password/role. Run from the backend dir:
  *   node --env-file=.env --import tsx scripts/bootstrap-admin.ts
  */
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
+import * as argon2 from "argon2";
 import { PrismaClient, record_status, role_enum } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -21,13 +22,25 @@ const prisma = new PrismaClient({
 });
 
 async function main(): Promise<void> {
-  const md5 = createHash("md5").update(Buffer.from(PASSWORD)).digest("hex");
+  const passwordHash = await argon2.hash(PASSWORD, {
+    type: argon2.argon2id,
+    memoryCost: 19456,
+    timeCost: 2,
+    parallelism: 1,
+  });
   const now = new Date();
 
   // 1) Pick an ACTIVE clinic that has an ACTIVE branch.
   const branch = await prisma.branch.findFirst({
-    where: { status: record_status.ACTIVE, clinic: { status: record_status.ACTIVE } },
-    select: { branch_id: true, clinic_id: true, clinic: { select: { clinic_name: true } } },
+    where: {
+      status: record_status.ACTIVE,
+      clinic: { status: record_status.ACTIVE },
+    },
+    select: {
+      branch_id: true,
+      clinic_id: true,
+      clinic: { select: { clinic_name: true } },
+    },
     orderBy: { created_at: "asc" },
   });
   if (!branch) throw new Error("No ACTIVE clinic with an ACTIVE branch found.");
@@ -63,7 +76,7 @@ async function main(): Promise<void> {
     await prisma.user.update({
       where: { user_id: userId },
       data: {
-        hash_password: md5,
+        hash_password: passwordHash,
         status: record_status.ACTIVE,
         is_clinic_root_user: true,
         updated_at: now,
@@ -79,7 +92,7 @@ async function main(): Promise<void> {
         name: "Admin",
         lastname: "Test",
         nickname: "admin",
-        hash_password: md5,
+        hash_password: passwordHash,
         status: record_status.ACTIVE,
         is_clinic_root_user: true,
         created_at: now,
@@ -92,7 +105,11 @@ async function main(): Promise<void> {
   for (const b of activeBranches) {
     await prisma.user_branch.upsert({
       where: { user_id_branch_id: { user_id: userId, branch_id: b.branch_id } },
-      update: { role_id: role_enum.ADMIN, status: record_status.ACTIVE, updated_at: now },
+      update: {
+        role_id: role_enum.ADMIN,
+        status: record_status.ACTIVE,
+        updated_at: now,
+      },
       create: {
         user_id: userId,
         branch_id: b.branch_id,
@@ -105,14 +122,23 @@ async function main(): Promise<void> {
   }
 
   console.log("✅ Admin test user ready");
-  console.log(JSON.stringify({
-    email: EMAIL,
-    password: PASSWORD,
-    userId,
-    clinicId,
-    clinicName: branch.clinic?.clinic_name,
-    branches: activeBranches.map((b) => ({ branchId: b.branch_id, branchName: b.branch_name })),
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        email: EMAIL,
+        password: PASSWORD,
+        userId,
+        clinicId,
+        clinicName: branch.clinic?.clinic_name,
+        branches: activeBranches.map((b) => ({
+          branchId: b.branch_id,
+          branchName: b.branch_name,
+        })),
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 main()

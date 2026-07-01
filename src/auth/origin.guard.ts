@@ -1,4 +1,9 @@
-import { type CanActivate, type ExecutionContext, ForbiddenException, Injectable } from "@nestjs/common";
+import {
+  type CanActivate,
+  type ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from "@nestjs/common";
 import type { Request } from "express";
 import { allowedOrigins } from "../common/origins";
 
@@ -8,9 +13,9 @@ const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /**
  * Lightweight CSRF defense for cookie auth. For state-changing requests, the
  * `Origin` (or `Referer`) header must be a trusted frontend origin. Requests
- * without either header are non-browser clients (curl/Postman) that aren't
- * subject to CSRF and carry no cookie unless one is explicitly supplied, so they
- * pass through. Safe (GET/HEAD/OPTIONS) requests are never blocked.
+ * without either header are allowed only when they are not carrying cookies
+ * (for example token-based curl/Postman requests). Safe (GET/HEAD/OPTIONS)
+ * requests are never blocked.
  *
  * Runs before authentication so a forged cross-site request is rejected before
  * any work happens.
@@ -24,7 +29,12 @@ export class OriginGuard implements CanActivate {
     if (!MUTATING.has(request.method.toUpperCase())) return true;
 
     const origin = this.requestOrigin(request);
-    if (!origin) return true;
+    if (!origin) {
+      if (request.headers.cookie) {
+        throw new ForbiddenException("Missing request origin");
+      }
+      return true;
+    }
 
     if (!this.allowed.includes(origin)) {
       throw new ForbiddenException("Request origin is not allowed");

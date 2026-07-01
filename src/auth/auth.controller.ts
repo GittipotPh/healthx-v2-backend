@@ -1,9 +1,25 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Res } from "@nestjs/common";
-import type { Response } from "express";
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Req,
+  Res,
+} from "@nestjs/common";
+import type { Request, Response } from "express";
 import { AuthService, type SessionResult } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
-import { clearAuthCookie, setAuthCookie } from "./auth.cookie";
+import {
+  REFRESH_COOKIE_NAME,
+  clearAuthCookie,
+  clearRefreshCookie,
+  setAuthCookie,
+  setRefreshCookie,
+} from "./auth.cookie";
 import { CurrentPrincipal, NoScope, Public } from "./scope.decorator";
+import { RateLimit } from "../common/rate-limit/rate-limit.decorator";
 import type { Principal } from "./auth.types";
 
 @Controller("authentication")
@@ -11,23 +27,51 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   /**
-   * Validates credentials and sets the HttpOnly `hx_token` cookie. The response
-   * body carries only non-sensitive session data (profile + clinics) — the token
-   * never reaches frontend JS.
+   * Validates credentials, then sets the HttpOnly access (`hx_token`) and refresh
+   * (`hx_refresh`) cookies. The body carries only non-sensitive session data —
+   * neither token reaches frontend JS. Rate-limited to blunt credential stuffing.
    */
   @Public()
+  @RateLimit({ limit: 10, windowSeconds: 60, by: "ip-email" })
   @Post("login")
   @HttpCode(HttpStatus.OK)
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<SessionResult> {
-    const { accessToken, profile, clinics } = await this.authService.login(
-      dto.email,
-      dto.password,
-    );
+    const { accessToken, refreshToken, profile, clinics } =
+      await this.authService.login(dto.email, dto.password);
     setAuthCookie(res, accessToken);
+    setRefreshCookie(res, refreshToken);
     return { profile, clinics };
+  }
+
+  /**
+   * Rotates the refresh token (single-use) and issues a fresh access token. Driven
+   * by the frontend when an access token expires. Public — it authenticates via
+   * the refresh cookie, not an access token. On any failure the cookies are
+   * cleared so the client falls back to login.
+   */
+  @Public()
+  @RateLimit({ limit: 30, windowSeconds: 60, by: "ip" })
+  @Post("refresh")
+  @HttpCode(HttpStatus.OK)
+  async refresh(
+    @Req() req: Request & { cookies?: Record<string, string> },
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SessionResult> {
+    const raw = req.cookies?.[REFRESH_COOKIE_NAME];
+    try {
+      const { accessToken, refreshToken, profile, clinics } =
+        await this.authService.refresh(raw);
+      setAuthCookie(res, accessToken);
+      setRefreshCookie(res, refreshToken);
+      return { profile, clinics };
+    } catch (error) {
+      clearAuthCookie(res);
+      clearRefreshCookie(res);
+      throw error;
+    }
   }
 
   /**
@@ -41,14 +85,19 @@ export class AuthController {
   }
 
   /**
-   * Clears the session cookie. Public so it always succeeds (and clears a stale
-   * cookie) even when the token has already expired.
+   * Revokes the refresh session and clears both cookies. Public so it always
+   * succeeds (and clears stale cookies) even when the access token has expired.
    */
   @Public()
   @Post("logout")
   @HttpCode(HttpStatus.OK)
-  logout(@Res({ passthrough: true }) res: Response): { success: true } {
+  async logout(
+    @Req() req: Request & { cookies?: Record<string, string> },
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ success: true }> {
+    await this.authService.logout(req.cookies?.[REFRESH_COOKIE_NAME]);
     clearAuthCookie(res);
+    clearRefreshCookie(res);
     return { success: true };
   }
 }
