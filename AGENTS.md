@@ -284,6 +284,11 @@ All APIs must return a consistent response shape wrapped globally by `CustomResp
 ## Logging Rules
 
 - All application logs, request logs, and runtime exceptions must be handled through the globally configured `nestjs-pino` Logger (`pino` engine) to produce consistent structured logs. Do not print plain logs or bypass NestJS Logger.
+- **No `console.log`/`console.error`/etc. left in committed code, ever — including
+  "temporary" debugging.** An audit found leftover `console.log({scope})` calls
+  leaking request scope (`userId`/`clinicId`/`roles`) into unstructured stdout in a
+  repository file. If you add a debug print while working, remove it before
+  finishing the task; grep for `console\.` in your diff as a final check.
 
 ## TypeScript Rules
 
@@ -342,11 +347,19 @@ logging). Reference HealthX rows by `reference_type` + `reference_id`.
 
 ## Security Rules
 
-- Do not expose internal DB IDs unnecessarily.
+- Do not expose internal DB IDs unnecessarily. (A raw HealthX `customer_id` must
+  never be shown as a substitute for a missing display field like HN — fall back to
+  a clearly-marked placeholder instead.)
 - Do not log sensitive payloads.
 - Do not expose patient medical details in Backoffice unless explicitly required and authorized.
 - Do not return full HealthX customer/OPD records unless a specific permission exists.
 - Prefer minimal lookup data for HealthX references, such as clinic name, branch name, user display name, and customer display name.
+- **Scope every read/write consistently by clinic AND branch** (per `ScopeGuard`'s
+  default `"branch"` level) unless a read is *intentionally and documentedly*
+  clinic-wide (e.g. customers are deliberately clinic-scoped). If you add a new
+  "detail"/"history" endpoint next to an existing list endpoint, make sure its
+  scoping matches its sibling's — don't silently drop `branchId` from a `where`
+  clause because it's convenient for the query you're writing.
 
 ## Testing Rules
 
@@ -401,8 +414,36 @@ Before reporting completion:
 1. **Prisma Client Usage**: Use `PrismaService` (`src/prisma.service.ts`), a single
    `@prisma/adapter-pg` client over the `public` schema. There is no separate
    backoffice client.
-2. **Transaction Integrity**: When a mutation spans multiple operations (e.g. update
-   an appointment status and write an audit_log entry), use `$transaction`.
+2. **`PrismaService` must come from one shared, global module — never redeclare it
+   as a per-feature `providers:` entry.** A repo audit (see `docs/refactor-plan.md`)
+   found `PrismaService` listed in `providers:` in 8 separate feature modules, which
+   gives each module its own instance (own connection pool, own `$connect` call) —
+   directly contradicting rule 1's "single client" intent and multiplying Postgres
+   connections for no benefit. Provide a `@Global() PrismaModule` (mirror
+   `redis/redis.module.ts`'s existing pattern) that exports `PrismaService` once, and
+   have every feature module import that instead of declaring its own provider.
+3. **Transaction Integrity**: When a mutation spans multiple operations (e.g. update
+   an appointment status and write an audit_log entry), use `$transaction`. This is
+   not optional/aspirational — if you add or touch a service method that does two+
+   writes, wrap them before moving on, even if the writes are in different
+   repositories (pass a `Prisma.TransactionClient` through both, or do both calls
+   inside one `prisma.$transaction(async (tx) => {...})` in the service).
+4. **Never derive an audit/actor identity field (e.g. `actorUserId`, `actorRole`)
+   from client-supplied request body/DTO fields.** Always derive it server-side from
+   the already-validated `RequestScope` (via `@Scope()`), even if the DTO also has a
+   field with that name for other purposes (e.g. `onBehalfOf*`). A client should never
+   be able to forge who performed an action in the audit trail.
+
+## Known Tech Debt
+
+A full backend audit (2026-07-01) is recorded in `../docs/refactor-plan.md` with
+~20 concrete findings (security, correctness, architecture/duplication, testing
+gaps, code quality), each with file/line references and a priority ranking. Pick up
+work from there rather than re-auditing from scratch. Highlights: no shared
+`PrismaModule` (rule 2 above), queue status transition not wrapped in
+`$transaction` (rule 3 above), zero test coverage on all five feature modules'
+business logic and on `ScopeGuard` specifically, and client-supplied actor identity
+in audit-sensitive DTOs (rule 4 above).
 
 ## Final Rule
 

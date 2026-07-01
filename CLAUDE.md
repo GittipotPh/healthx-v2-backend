@@ -108,6 +108,16 @@ clinic status transitions (queue/opd/appointment) via `AuditLogService.create`
 
 - No `any`. Explicit return types on public methods. No unsafe casts. No `// @ts-ignore`.
 
+## Known Tech Debt
+
+Full audit findings + priority-ranked punch list: `../docs/refactor-plan.md`. Top
+items: `PrismaService` must be provided by one shared `@Global() PrismaModule`, not
+redeclared per feature module (currently 8x instances → 8x connection pools); queue
+status transition + audit write must be wrapped in `$transaction`; `ScopeGuard` and
+the queue service/repository have no tests despite being the most security/write
+-critical code in the app. See `AGENTS.md`'s "Database Client and Transaction Rules"
+and "Security Rules" for the standing rules these findings turned into.
+
 ## Validation Commands
 
 ```bash
