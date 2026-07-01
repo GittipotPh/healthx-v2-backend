@@ -1,4 +1,4 @@
-import type { appointment, customer, statusAppointment } from "@prisma/client";
+import type { appointment, customer, role_enum, statusAppointment, type_branch } from "@prisma/client";
 
 export type AppointmentWithCustomer = appointment & { customer?: customer | null };
 
@@ -48,4 +48,42 @@ export function toAppointmentView(row: AppointmentWithCustomer): AppointmentView
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+export interface AppointmentOption {
+  id: string;
+  label: string;
+}
+
+export interface BranchOption extends AppointmentOption {
+  typeBranch: type_branch;
+}
+
+export interface BranchScopedOption extends AppointmentOption {
+  branchId: string;
+}
+
+export interface StaffOption extends BranchScopedOption {
+  role: role_enum;
+}
+
+export interface AppointmentOptionsView {
+  branches: BranchOption[];
+  rooms: BranchScopedOption[];
+  procedures: BranchScopedOption[];
+  doctors: StaffOption[];
+  assistants: StaffOption[];
+  consultTypes: AppointmentOption[];
+  marketingPlatforms: AppointmentOption[];
+  marketingCampaigns: AppointmentOption[];
+  preparationTags: AppointmentOption[];
+  internalTags: AppointmentOption[];
+  numbingDurations: number[];
+}
+
+export interface AppointmentOptionPage<TOption extends AppointmentOption = AppointmentOption> {
+  items: TOption[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
