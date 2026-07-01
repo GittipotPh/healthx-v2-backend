@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { AppointmentOptionsRepository } from "./appointment-options.repository";
 import { AppointmentsRepository } from "./appointments.repository";
 import {
   type AppointmentOptionPage,
@@ -21,7 +22,10 @@ export interface AppointmentListResult {
 
 @Injectable()
 export class AppointmentsService {
-  constructor(private readonly repository: AppointmentsRepository) {}
+  constructor(
+    private readonly repository: AppointmentsRepository,
+    private readonly optionsRepository: AppointmentOptionsRepository,
+  ) {}
 
   async list(query: QueryAppointmentsDto, scope: RequestScope): Promise<AppointmentListResult> {
     const result = await this.repository.findMany(query, scope);
@@ -34,27 +38,27 @@ export class AppointmentsService {
   }
 
   options(scope: RequestScope): Promise<AppointmentOptionsView> {
-    return this.repository.options(scope);
+    return this.optionsRepository.options(scope);
   }
 
   procedureOptions(
     query: QueryAppointmentOptionsDto,
     scope: RequestScope,
   ): Promise<AppointmentOptionPage<BranchScopedOption>> {
-    return this.repository.procedureOptions(query, scope);
+    return this.optionsRepository.procedureOptions(query, scope);
   }
 
   doctorOptions(
     query: QueryAppointmentOptionsDto,
     scope: RequestScope,
   ): Promise<AppointmentOptionPage<StaffOption>> {
-    return this.repository.doctorOptions(query, scope);
+    return this.optionsRepository.doctorOptions(query, scope);
   }
 
   assistantOptions(
     query: QueryAppointmentOptionsDto,
     scope: RequestScope,
   ): Promise<AppointmentOptionPage<StaffOption>> {
-    return this.repository.assistantOptions(query, scope);
+    return this.optionsRepository.assistantOptions(query, scope);
   }
 }
