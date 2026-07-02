@@ -7,9 +7,9 @@ import {
 import { Reflector } from "@nestjs/core";
 import { record_status, type role_enum } from "@prisma/client";
 import type { Request } from "express";
-import { PrismaService } from "../prisma.service";
-import { IS_PUBLIC_KEY, SCOPE_LEVEL_KEY, type ScopeLevel } from "./scope.decorator";
-import type { Principal, RequestScope } from "./auth.types";
+import { PrismaService } from "../../prisma.service";
+import { IS_PUBLIC_KEY, SCOPE_LEVEL_KEY, type ScopeLevel } from "../scope.decorator";
+import type { Principal, RequestScope } from "../auth.types";
 
 const CLINIC_HEADER = "x-clinic-id";
 const BRANCH_HEADER = "x-branch-id";

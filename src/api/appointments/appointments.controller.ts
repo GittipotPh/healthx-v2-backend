@@ -1,10 +1,12 @@
-import { Controller, Get, Query } from "@nestjs/common";
+import { Body, Controller, Get, Post, Query } from "@nestjs/common";
 import { AppointmentsService, type AppointmentListResult } from "./appointments.service";
+import { CreateAppointmentDto } from "./dto/create-appointment.dto";
 import { QueryAppointmentOptionsDto } from "./dto/query-appointment-options.dto";
 import { QueryAppointmentsDto } from "./dto/query-appointments.dto";
 import type {
   AppointmentOptionPage,
   AppointmentOptionsView,
+  AppointmentView,
   BranchScopedOption,
   StaffOption,
 } from "./appointments.mapper";
@@ -21,6 +23,14 @@ export class AppointmentsController {
     @Scope() scope: RequestScope,
   ): Promise<AppointmentListResult> {
     return this.appointmentsService.list(query, scope);
+  }
+
+  @Post()
+  create(
+    @Body() dto: CreateAppointmentDto,
+    @Scope() scope: RequestScope,
+  ): Promise<AppointmentView> {
+    return this.appointmentsService.create(dto, scope);
   }
 
   @Get("options")

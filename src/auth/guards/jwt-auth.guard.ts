@@ -7,9 +7,9 @@ import {
 import { Reflector } from "@nestjs/core";
 import { JwtService } from "@nestjs/jwt";
 import type { Request } from "express";
-import { AUTH_COOKIE_NAME } from "./auth.cookie";
-import { IS_PUBLIC_KEY } from "./scope.decorator";
-import type { JwtPrincipalPayload, Principal } from "./auth.types";
+import { AUTH_COOKIE_NAME } from "../auth.cookie";
+import { IS_PUBLIC_KEY } from "../scope.decorator";
+import type { JwtPrincipalPayload, Principal } from "../auth.types";
 
 /**
  * Verifies the access token and attaches the authenticated `principal`

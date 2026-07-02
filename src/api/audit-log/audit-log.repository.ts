@@ -35,8 +35,11 @@ export class AuditLogRepository {
     return `${user.name ?? ""} ${user.lastname ?? ""}`.trim() || user.email;
   }
 
-  async create(dto: AuditLogCreateInput): Promise<audit_log> {
-    return this.prisma.audit_log.create({
+  async create(
+    dto: AuditLogCreateInput,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<audit_log> {
+    return tx.audit_log.create({
       data: {
         clinic_id: dto.clinicId,
         branch_id: dto.branchId,

@@ -6,8 +6,8 @@ import {
 } from "./queue.service";
 import { QueryQueueDto } from "./dto/query-queue.dto";
 import { TransitionQueueDto } from "./dto/transition-queue.dto";
-import { Scope } from "../../auth/scope.decorator";
-import type { RequestScope } from "../../auth/auth.types";
+import { CurrentPrincipal, Scope } from "../../auth/scope.decorator";
+import type { Principal, RequestScope } from "../../auth/auth.types";
 
 @Controller("clinic/queue")
 export class QueueController {
@@ -22,7 +22,8 @@ export class QueueController {
   transition(
     @Body() dto: TransitionQueueDto,
     @Scope() scope: RequestScope,
+    @CurrentPrincipal() principal: Principal,
   ): Promise<QueueTransitionResult> {
-    return this.queueService.transition(dto, scope);
+    return this.queueService.transition(dto, scope, principal);
   }
 }

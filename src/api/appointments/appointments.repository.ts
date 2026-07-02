@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import type { Prisma } from "@prisma/client";
+import { statusAppointment, type Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
+import { INITIAL_QUEUE_STEP } from "../queue/queue.constants";
 import type { AppointmentWithCustomer } from "./appointments.mapper";
+import type { CreateAppointmentDto } from "./dto/create-appointment.dto";
 import type { QueryAppointmentsDto } from "./dto/query-appointments.dto";
 import type { RequestScope } from "../../auth/auth.types";
 
@@ -36,6 +39,57 @@ export class AppointmentsRepository {
     ]);
 
     return { items, total, page, pageSize };
+  }
+
+  /**
+   * Creates the appointment and, in the same transaction, bootstraps its
+   * queue_status row so the card immediately appears on today's Kanban queue
+   * at step 1 (CONFIRMED). status_appointment starts at APPOINT (mirrors the
+   * legacy default) and is kept independently: the Kanban step transitions
+   * update it via STEP_TO_APPOINTMENT_STATUS as the card moves columns.
+   */
+  async create(dto: CreateAppointmentDto, scope: RequestScope): Promise<AppointmentWithCustomer> {
+    const appointmentId = randomUUID();
+    const now = new Date();
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.appointment.create({
+        data: {
+          appointment_id: appointmentId,
+          clinic_id: scope.clinicId,
+          branch_id: scope.branchId,
+          customer_id: dto.customerId,
+          user_create: scope.userId,
+          room: dto.room,
+          date_appointment: dto.dateAppointment,
+          time_arrive: dto.timeArrive,
+          start_time: dto.startTime,
+          end_time: dto.endTime,
+          channel: dto.channel,
+          is_consult: dto.isConsult,
+          apply_anesthetic: dto.applyAnesthetic,
+          appointment_detail: dto.detail,
+          status_appointment: statusAppointment.APPOINT,
+          opd_id: dto.opdId,
+          updated_at: now,
+          created_at: now,
+        },
+        include: { customer: true },
+      });
+
+      await tx.queue_status.create({
+        data: {
+          clinic_id: scope.clinicId,
+          branch_id: scope.branchId,
+          appointment_id: appointmentId,
+          current_step: INITIAL_QUEUE_STEP,
+          entered_at: now,
+          updated_at: now,
+        },
+      });
+
+      return created;
+    });
   }
 
   buildWhere(query: QueryAppointmentsDto, scope: RequestScope): Prisma.appointmentWhereInput {

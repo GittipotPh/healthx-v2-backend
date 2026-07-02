@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { auditReferenceType, type audit_log } from "@prisma/client";
+import { auditReferenceType, type Prisma, type audit_log } from "@prisma/client";
 import {
   AuditLogRepository,
   type AuditLogCreateInput,
@@ -7,6 +7,7 @@ import {
 import { type AuditLogView, toAuditLogView } from "./audit-log.mapper";
 import type { QueryAuditLogDto } from "./dto/query-audit-log.dto";
 import type { RequestScope } from "../../auth/auth.types";
+import type { PrismaService } from "../../prisma.service";
 
 export interface AuditLogListResult {
   items: AuditLogView[];
@@ -29,8 +30,11 @@ export class AuditLogService {
     };
   }
 
-  async create(input: AuditLogCreateInput): Promise<AuditLogView> {
-    const created = await this.repository.create(input);
+  async create(
+    input: AuditLogCreateInput,
+    tx?: Prisma.TransactionClient | PrismaService,
+  ): Promise<AuditLogView> {
+    const created = await this.repository.create(input, tx);
     return toAuditLogView(created);
   }
 

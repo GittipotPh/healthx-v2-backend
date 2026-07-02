@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import type { appointment, statusAppointment } from "@prisma/client";
+import type { appointment, Prisma, queue_status, statusAppointment } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import type { AppointmentForQueue } from "./queue.mapper";
 
@@ -47,10 +47,58 @@ export class QueueRepository {
   async updateAppointmentStatus(
     appointmentId: string,
     status: statusAppointment,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<appointment> {
-    return this.prisma.appointment.update({
+    return tx.appointment.update({
       where: { appointment_id: appointmentId },
       data: { status_appointment: status, updated_at: new Date() },
+    });
+  }
+
+  async findQueueStatusesByAppointmentIds(
+    appointmentIds: string[],
+  ): Promise<Record<string, string>> {
+    if (appointmentIds.length === 0) return {};
+    const rows = await this.prisma.queue_status.findMany({
+      where: { appointment_id: { in: appointmentIds } },
+      select: { appointment_id: true, current_step: true },
+    });
+    return Object.fromEntries(rows.map((row) => [row.appointment_id, row.current_step]));
+  }
+
+  async findQueueStatus(appointmentId: string): Promise<queue_status | null> {
+    return this.prisma.queue_status.findUnique({ where: { appointment_id: appointmentId } });
+  }
+
+  /** Advances (or creates) an appointment's queue card to `stepCode`, refreshing `entered_at` only when the step actually changes. */
+  async upsertQueueStep(
+    clinicId: string,
+    branchId: string,
+    appointmentId: string,
+    stepCode: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<queue_status> {
+    const now = new Date();
+    const existing = await tx.queue_status.findUnique({ where: { appointment_id: appointmentId } });
+    if (!existing) {
+      return tx.queue_status.create({
+        data: {
+          clinic_id: clinicId,
+          branch_id: branchId,
+          appointment_id: appointmentId,
+          current_step: stepCode,
+          entered_at: now,
+          updated_at: now,
+        },
+      });
+    }
+    return tx.queue_status.update({
+      where: { appointment_id: appointmentId },
+      data: {
+        current_step: stepCode,
+        entered_at: existing.current_step === stepCode ? existing.entered_at : now,
+        updated_at: now,
+      },
     });
   }
 

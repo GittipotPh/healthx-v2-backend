@@ -38,10 +38,15 @@ Single shared database and schema (`public`) with the legacy HealthX app.
 Important Prisma files:
 
 ```txt
-prisma/schema.prisma                  - Full HealthX public schema + the new audit_log model
-prisma.config.ts                      - Prisma 7 config: loads .env, sets DATABASE_URL datasource
-prisma/sql/001_create_audit_log.sql   - Surgical, idempotent migration for the audit_log table
+prisma/schema.prisma                            - Full HealthX public schema + new app-owned models
+prisma.config.ts                                - Prisma 7 config: loads .env, sets DATABASE_URL datasource
+prisma/sql/001_create_audit_log.sql             - Surgical, idempotent migration for audit_log
+prisma/sql/002_create_queue_status_and_config.sql - queue_status + ref_queue_step_status (Kanban steps)
+prisma/sql/003_extend_status_appointment_enum.sql - additive enum extension (values only, no table ALTER)
 ```
+
+App-owned tables (safe to evolve): `audit_log`, `queue_status`, `ref_queue_step_status`.
+All follow the string-reference rule below — no FK to legacy HealthX tables.
 
 In Prisma 7 the `url` is configured in `prisma.config.ts`, not the schema file.
 
@@ -257,10 +262,24 @@ DTOs should validate:
 - string ID fields for HealthX references
 - pagination parameters
 - search/filter parameters
+- **format of date/time strings written to legacy columns.** Legacy HealthX stores
+  `date_appointment`/`start_time`/etc. as strings and every queue/calendar query
+  filters them by string equality/range — a malformed write (e.g. `"07/02/2026"`)
+  silently disappears from all views. Any DTO field destined for such a column must
+  carry a `@Matches(...)` format check (`^\d{4}-\d{2}-\d{2}$` for dates, matching
+  legacy time format for times), not just `@IsString` + `@MaxLength`.
 
 Do not accept `any`.
 
 Do not pass raw request bodies directly into Prisma.
+
+**On write endpoints, validate referenced-row existence and scope before writing.**
+If a create/update DTO carries an ID pointing at another HealthX row (customerId,
+opdId, roomId, …), check that the row exists AND belongs to the request's
+clinic/branch scope before persisting — mirroring how appointment-create checks the
+customer. Never write a client-supplied reference ID blind; there are no DB foreign
+keys to catch a bad one (see the string-reference rule), so the app layer is the
+only integrity check that exists.
 
 ## Response Contract Rules
 
@@ -328,10 +347,16 @@ Final API path example:
 The five feature modules under `src/api/`:
 
 1. customers — list / detail (read)
-2. appointments — list with branch/date/status filters (read)
+2. appointments — list + options catalogs (read) + **create** (write + audit; transactional
+   with the `queue_status` bootstrap row)
 3. opd — list + history-by-customer (read)
-4. queue — today's queue (derived from appointments + opd) + status transition (write + audit)
-5. audit-log — list + create (the new feature; `public.audit_log`)
+4. queue — today's queue (appointments + `queue_status` steps) + status/step transition
+   (write + audit, one `$transaction`)
+5. audit-log — list + login-record (the new feature; `public.audit_log`)
+
+Shared helpers live under `src/common/` (e.g. `branch-access/` — the single source for
+"which branches can this scope see"; reuse it, don't re-derive membership logic in a
+repository).
 
 ## Audit Log Rules
 
@@ -360,6 +385,12 @@ logging). Reference HealthX rows by `reference_type` + `reference_id`.
   "detail"/"history" endpoint next to an existing list endpoint, make sure its
   scoping matches its sibling's — don't silently drop `branchId` from a `where`
   clause because it's convenient for the query you're writing.
+- **Remember the composite keys when querying by a bare ID.** `customer` is keyed
+  `[customer_id, clinic_id]` (and `opd` is `[opd_id, branch_id]`) — a query that
+  filters only `customer_id: { in: ... }` with no `clinic_id` can match rows from
+  *another clinic* that happens to reuse the ID, leaking cross-tenant data (see
+  `findCustomersHistories`, refactor-plan #9). Always pair such IDs with their
+  scope column in the `where`.
 
 ## Testing Rules
 
@@ -436,14 +467,22 @@ Before reporting completion:
 
 ## Known Tech Debt
 
-A full backend audit (2026-07-01) is recorded in `../docs/refactor-plan.md` with
-~20 concrete findings (security, correctness, architecture/duplication, testing
-gaps, code quality), each with file/line references and a priority ranking. Pick up
-work from there rather than re-auditing from scratch. Highlights: no shared
-`PrismaModule` (rule 2 above), queue status transition not wrapped in
-`$transaction` (rule 3 above), zero test coverage on all five feature modules'
-business logic and on `ScopeGuard` specifically, and client-supplied actor identity
-in audit-sensitive DTOs (rule 4 above).
+A full backend audit (2026-07-01, **re-verified 2026-07-02**) is recorded in
+`../docs/refactor-plan.md` — read its "Status update — 2026-07-02" section first;
+it marks what is fixed vs still open. Pick up work from there rather than
+re-auditing from scratch.
+
+Already fixed (don't redo): queue transition is transactional; transition actor
+identity is server-derived; scope `console.log` leaks removed; branch-access logic
+extracted to `common/branch-access`; appointment options split out of the main
+repository with static catalogs in constants.
+
+Top remaining items: the ungated `POST /clinic/audit-log` create endpoint
+(client-supplied `actorUserId`, no role gate — remove or gate it, rule 4 above);
+no shared `@Global() PrismaModule` (rule 2 above — now 8 redeclarations including
+`branch-access`); OPD history dropping branch scope; missing date/time format
+validation and `opdId` existence check on appointment-create (see DTO rules above);
+zero tests on feature modules and `ScopeGuard` while the write surface is growing.
 
 ## Final Rule
 

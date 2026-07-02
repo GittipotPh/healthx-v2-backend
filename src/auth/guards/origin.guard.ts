@@ -5,7 +5,7 @@ import {
   Injectable,
 } from "@nestjs/common";
 import type { Request } from "express";
-import { allowedOrigins } from "../common/origins";
+import { allowedOrigins } from "../../common/origins";
 
 /** Methods that can mutate state and therefore need CSRF/origin protection. */
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);

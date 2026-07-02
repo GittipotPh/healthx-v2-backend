@@ -1,7 +1,7 @@
 import { ForbiddenException, type ExecutionContext } from "@nestjs/common";
 import type { Request } from "express";
 import { OriginGuard } from "./origin.guard";
-import { resetBackendEnvForTest } from "../env";
+import { resetBackendEnvForTest } from "../../env";
 
 const ALLOWED_ORIGINS = [
   "https://app-dev.healthx-pro.com",

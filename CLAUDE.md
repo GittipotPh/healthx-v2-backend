@@ -18,13 +18,19 @@ NestJS 11 · TypeScript · Prisma 7 (`@prisma/adapter-pg`) · PostgreSQL (`publi
 
 ```
 prisma.config.ts              → Prisma 7 config (loads .env, DATABASE_URL datasource)
-prisma/schema.prisma          → Full HealthX public schema + the new audit_log model
-prisma/sql/001_create_audit_log.sql → Surgical migration for audit_log (idempotent)
+prisma/schema.prisma          → Full HealthX public schema + app-owned models
+prisma/sql/00*.sql            → Surgical idempotent migrations: audit_log, queue_status
+                                + ref_queue_step_status, statusAppointment enum extension
 src/main.ts                   → Bootstrap: /api/v1 prefix, ValidationPipe, response/error contract, CORS
 src/prisma.service.ts         → PrismaClient over @prisma/adapter-pg
-src/common/                   → ResponseInterceptor + AllExceptionsFilter
+src/common/                   → ResponseInterceptor + AllExceptionsFilter, rate-limit,
+                                branch-access (shared "which branches can this scope see")
 src/api/<feature>/            → audit-log, queue, customers, appointments, opd
 ```
+
+App-owned tables: `audit_log`, `queue_status`, `ref_queue_step_status` (string refs
+to HealthX rows, no FK). Write endpoints today: `POST clinic/queue/transition`,
+`POST clinic/appointments` (both transactional + audited), `POST clinic/audit-log[/login]`.
 
 ## Database Rules
 
@@ -110,13 +116,17 @@ clinic status transitions (queue/opd/appointment) via `AuditLogService.create`
 
 ## Known Tech Debt
 
-Full audit findings + priority-ranked punch list: `../docs/refactor-plan.md`. Top
-items: `PrismaService` must be provided by one shared `@Global() PrismaModule`, not
-redeclared per feature module (currently 8x instances → 8x connection pools); queue
-status transition + audit write must be wrapped in `$transaction`; `ScopeGuard` and
-the queue service/repository have no tests despite being the most security/write
--critical code in the app. See `AGENTS.md`'s "Database Client and Transaction Rules"
-and "Security Rules" for the standing rules these findings turned into.
+Full audit findings + priority-ranked punch list: `../docs/refactor-plan.md` —
+re-verified 2026-07-02; read its status-update section first (it marks what's
+already fixed, e.g. the queue transition is now transactional). Top remaining
+items: remove/gate the ungated `POST /clinic/audit-log` create endpoint
+(client-supplied actor identity); `PrismaService` must be provided by one shared
+`@Global() PrismaModule`, not redeclared per feature module (currently 8x instances
+→ 8x connection pools); OPD history drops branch scope; `ScopeGuard`, the queue
+module, and the new appointment-create path have no tests despite being the most
+security/write-critical code in the app. See `AGENTS.md`'s "Database Client and
+Transaction Rules", "DTO and Validation Rules", and "Security Rules" for the
+standing rules these findings turned into.
 
 ## Validation Commands
 
