@@ -37,6 +37,7 @@ export interface QueueItemView {
   opdStatus: string | null;
   isConsult: boolean;
   applyAnesthetic: boolean;
+  customerImage: string | null;
   allergies: string[];
   appointmentDetail: string | null;
   cancelHistory: number;
@@ -91,7 +92,9 @@ export function toQueueItemView(
     appointmentId: row.appointment_id,
     queueNo,
     time: row.start_time,
-    hn: row.customer?.personal_id ?? row.customer_id,
+    // Never fall back to customer_id here: it's an internal DB id, not an HN,
+    // and must not be shown to (or leak into) the client.
+    hn: row.customer?.personal_id ?? "—",
     name,
     nickname: row.customer?.nickname ?? null,
     phone: row.customer?.phone_number ?? null,
@@ -105,6 +108,7 @@ export function toQueueItemView(
     opdStatus: row.opd ? row.opd.status_opd : null,
     isConsult: row.is_consult,
     applyAnesthetic: row.apply_anesthetic,
+    customerImage: row.customer?.customer_image ?? null,
     allergies,
     appointmentDetail: row.appointment_detail,
     cancelHistory: history?.cancelHistory ?? 0,

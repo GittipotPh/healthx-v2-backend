@@ -30,7 +30,9 @@ src/api/<feature>/            → audit-log, queue, customers, appointments, opd
 
 App-owned tables: `audit_log`, `queue_status`, `ref_queue_step_status` (string refs
 to HealthX rows, no FK). Write endpoints today: `POST clinic/queue/transition`,
-`POST clinic/appointments` (both transactional + audited), `POST clinic/audit-log[/login]`.
+`POST clinic/appointments` (both transactional + audited), `POST clinic/audit-log/login`.
+There is deliberately NO generic audit-log create endpoint — audit rows are written
+server-side only, as workflow side effects with scope-derived actors.
 
 ## Database Rules
 
@@ -118,15 +120,17 @@ clinic status transitions (queue/opd/appointment) via `AuditLogService.create`
 
 Full audit findings + priority-ranked punch list: `../docs/refactor-plan.md` —
 re-verified 2026-07-02; read its status-update section first (it marks what's
-already fixed, e.g. the queue transition is now transactional). Top remaining
-items: remove/gate the ungated `POST /clinic/audit-log` create endpoint
-(client-supplied actor identity); `PrismaService` must be provided by one shared
-`@Global() PrismaModule`, not redeclared per feature module (currently 8x instances
-→ 8x connection pools); OPD history drops branch scope; `ScopeGuard`, the queue
-module, and the new appointment-create path have no tests despite being the most
-security/write-critical code in the app. See `AGENTS.md`'s "Database Client and
-Transaction Rules", "DTO and Validation Rules", and "Security Rules" for the
-standing rules these findings turned into.
+already fixed, e.g. the queue transition is now transactional, the ungated
+audit-log create endpoint is removed, `PrismaService` is provided once by the
+`@Global()` `PrismaModule` in `src/prisma.module.ts`, OPD history is branch
+scoped, appointment-create validates date/time formats + `opdId` scope, and
+`ScopeGuard`/queue-transition/appointment-create now have unit specs;
+`findCustomersHistories` is clinic-scoped with a 12-month window and the queue
+HN fallback is a `"—"` placeholder, never `customer_id` — Session 5, 2026-07-02).
+Top remaining items: fetch-then-check scoping in `queue.repository.findAppointment`
+(#12) and the audit-in-tx vs best-effort policy decision (#28). See `AGENTS.md`'s
+"Database Client and Transaction Rules", "DTO and Validation Rules", and "Security
+Rules" for the standing rules these findings turned into.
 
 ## Validation Commands
 

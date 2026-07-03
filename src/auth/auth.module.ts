@@ -1,7 +1,6 @@
 import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { JwtModule } from "@nestjs/jwt";
-import { PrismaService } from "../prisma.service";
 import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
 import { RefreshSessionService } from "./refresh-session.service";
@@ -24,7 +23,6 @@ import { backendEnv } from "../env";
   ],
   controllers: [AuthController],
   providers: [
-    PrismaService,
     AuthService,
     RefreshSessionService,
     // Order matters: rate-limit, then reject forged origins (CSRF), then

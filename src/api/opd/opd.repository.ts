@@ -35,9 +35,16 @@ export class OpdRepository {
     return { items, total, page, pageSize };
   }
 
-  async findHistoryByCustomer(customerId: string, clinicId: string): Promise<OpdWithCustomer[]> {
+  async findHistoryByCustomer(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<OpdWithCustomer[]> {
     return this.prisma.opd.findMany({
-      where: { customer_id: customerId, clinic_id: clinicId },
+      where: {
+        customer_id: customerId,
+        clinic_id: scope.clinicId,
+        branch_id: scope.branchId,
+      },
       include: { customer: true },
       orderBy: { opd_date: "desc" },
     });

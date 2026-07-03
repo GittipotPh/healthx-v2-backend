@@ -34,7 +34,7 @@ export class QueueService {
     const customerIds = Array.from(new Set(rows.map((row) => row.customer_id)));
     const appointmentIds = rows.map((row) => row.appointment_id);
     const [histories, steps] = await Promise.all([
-      this.repository.findCustomersHistories(customerIds),
+      this.repository.findCustomersHistories(scope.clinicId, customerIds),
       this.repository.findQueueStatusesByAppointmentIds(appointmentIds),
     ]);
     return {

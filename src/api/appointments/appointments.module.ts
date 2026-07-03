@@ -1,5 +1,4 @@
 import { Module } from "@nestjs/common";
-import { PrismaService } from "../../prisma.service";
 import { BranchAccessModule } from "../../common/branch-access/branch-access.module";
 import { CustomersModule } from "../customers/customers.module";
 import { AuditLogModule } from "../audit-log/audit-log.module";
@@ -11,12 +10,7 @@ import { AppointmentsRepository } from "./appointments.repository";
 @Module({
   imports: [BranchAccessModule, CustomersModule, AuditLogModule],
   controllers: [AppointmentsController],
-  providers: [
-    AppointmentsService,
-    AppointmentsRepository,
-    AppointmentOptionsRepository,
-    PrismaService,
-  ],
+  providers: [AppointmentsService, AppointmentsRepository, AppointmentOptionsRepository],
   exports: [AppointmentsService, AppointmentsRepository, AppointmentOptionsRepository],
 })
 export class AppointmentsModule {}

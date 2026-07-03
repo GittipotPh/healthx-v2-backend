@@ -1,7 +1,6 @@
 import { Injectable } from "@nestjs/common";
-import type { Prisma, audit_log } from "@prisma/client";
+import type { Prisma, audit_log, auditReferenceType } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
-import type { CreateAuditLogDto } from "./dto/create-audit-log.dto";
 import type { QueryAuditLogDto } from "./dto/query-audit-log.dto";
 import type { RequestScope } from "../../auth/auth.types";
 
@@ -13,13 +12,30 @@ export interface PaginatedAuditLogs {
 }
 
 /**
- * Service-level input for writing an audit entry: the validated clinic/branch
- * scope plus the client-supplied fields (HTTP DTO no longer carries the scope).
+ * Service-internal input for writing an audit entry. There is deliberately no
+ * HTTP DTO for this: audit rows are only created server-side as workflow side
+ * effects, with the actor derived from the validated request scope.
  */
-export type AuditLogCreateInput = CreateAuditLogDto & {
+export interface AuditLogCreateInput {
   clinicId: string;
   branchId: string;
-};
+  referenceType: auditReferenceType;
+  referenceId: string;
+  action: string;
+  actionLabel: string;
+  fromStatus?: string;
+  toStatus?: string;
+  actorUserId: string;
+  actorName?: string;
+  actorRole?: string;
+  onBehalfOfUserId?: string;
+  onBehalfOfName?: string;
+  durationSec?: number;
+  notes?: string;
+  reason?: string;
+  ipAddress?: string;
+  metadata?: Record<string, unknown>;
+}
 
 @Injectable()
 export class AuditLogRepository {

@@ -92,6 +92,23 @@ export class AppointmentsRepository {
     });
   }
 
+  /**
+   * True when the OPD row exists in this clinic/branch. `opd`'s PK is composite
+   * [opd_id, branch_id], so an unscoped opd_id lookup could match another
+   * branch's row — always check clinic AND branch before linking it.
+   */
+  async opdExistsInScope(opdId: string, scope: RequestScope): Promise<boolean> {
+    const found = await this.prisma.opd.findFirst({
+      where: {
+        opd_id: opdId,
+        clinic_id: scope.clinicId,
+        branch_id: scope.branchId,
+      },
+      select: { opd_id: true },
+    });
+    return found !== null;
+  }
+
   buildWhere(query: QueryAppointmentsDto, scope: RequestScope): Prisma.appointmentWhereInput {
     const where: Prisma.appointmentWhereInput = {
       clinic_id: scope.clinicId,

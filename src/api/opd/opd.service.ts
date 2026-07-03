@@ -25,8 +25,8 @@ export class OpdService {
     };
   }
 
-  async historyByCustomer(customerId: string, clinicId: string): Promise<OpdView[]> {
-    const rows = await this.repository.findHistoryByCustomer(customerId, clinicId);
+  async historyByCustomer(customerId: string, scope: RequestScope): Promise<OpdView[]> {
+    const rows = await this.repository.findHistoryByCustomer(customerId, scope);
     return rows.map(toOpdView);
   }
 }

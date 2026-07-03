@@ -477,12 +477,16 @@ identity is server-derived; scope `console.log` leaks removed; branch-access log
 extracted to `common/branch-access`; appointment options split out of the main
 repository with static catalogs in constants.
 
-Top remaining items: the ungated `POST /clinic/audit-log` create endpoint
-(client-supplied `actorUserId`, no role gate — remove or gate it, rule 4 above);
-no shared `@Global() PrismaModule` (rule 2 above — now 8 redeclarations including
-`branch-access`); OPD history dropping branch scope; missing date/time format
-validation and `opdId` existence check on appointment-create (see DTO rules above);
-zero tests on feature modules and `ScopeGuard` while the write surface is growing.
+Also fixed 2026-07-02 (Sessions 1–2, don't redo): the ungated
+`POST /clinic/audit-log` create endpoint was removed; `PrismaService` is provided
+once by the `@Global()` `PrismaModule`; OPD history is clinic+branch scoped;
+appointment-create validates date (`YYYY-MM-DD`) / time (`HH:mm`) formats and
+checks `opdId` exists in the caller's clinic+branch; `ScopeGuard`, queue
+transition, and appointment-create have unit specs.
+
+Top remaining items: `findCustomersHistories` unscoped/unbounded (clinic filter +
+date window); HN fallback leaking internal `customer_id` in `queue.mapper.ts` —
+both queued as Session 5 in `../tasks-fix.md`.
 
 ## Final Rule
 

@@ -30,6 +30,14 @@ export class OriginGuard implements CanActivate {
 
     const origin = this.requestOrigin(request);
     if (!origin) {
+      // Documented assumption (refactor-plan #4): a mutating request with no
+      // Origin AND no Referer passes through *only if it carries no cookies*.
+      // CSRF requires the browser to attach the victim's cookies, and every
+      // current browser sends Origin (or at least Referer) on cross-site
+      // state-changing requests — so a cookie-less header-less request can't
+      // be a CSRF attempt; it's a non-browser client (curl/Postman/health
+      // checks) that still has to pass authentication downstream. A request
+      // that DOES carry cookies without an origin is rejected as suspect.
       if (request.headers.cookie) {
         throw new ForbiddenException("Missing request origin");
       }

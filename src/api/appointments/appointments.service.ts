@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { auditReferenceType } from "@prisma/client";
 import { AppointmentOptionsRepository } from "./appointment-options.repository";
 import { AppointmentsRepository } from "./appointments.repository";
@@ -46,6 +46,10 @@ export class AppointmentsService {
   async create(dto: CreateAppointmentDto, scope: RequestScope): Promise<AppointmentView> {
     // Throws NotFoundException if the customer doesn't exist in this clinic.
     await this.customersService.detail(dto.customerId, scope.clinicId);
+
+    if (dto.opdId && !(await this.repository.opdExistsInScope(dto.opdId, scope))) {
+      throw new NotFoundException("OPD record not found for this clinic/branch");
+    }
 
     const created = await this.repository.create(dto, scope);
 

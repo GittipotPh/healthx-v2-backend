@@ -2040,19 +2040,6 @@ model audit_log {
   @@index([created_at])
 }
 
-enum auditReferenceType {
-  QUEUE
-  APPOINTMENT
-  OPD
-  CUSTOMER
-  SYSTEM
-}
-
-// New clinic-ops lookup table: the catalog of queue-step statuses (replaces
-// what would otherwise be a hardcoded Postgres enum). New steps are added by
-// inserting a row here, no schema migration required. Owned entirely by this
-// app (not part of the legacy HealthX schema), so a real FK from queue_status
-// into it is safe.
 model ref_queue_step_status {
   code         String         @id @db.VarChar(30)
   label_th     String         @db.VarChar(100)
@@ -2066,37 +2053,25 @@ model ref_queue_step_status {
   queue_status queue_status[]
 }
 
-// New clinic-ops table (not part of the legacy HealthX schema). Tracks each
-// appointment's live position in the 9-step queue Kanban flow; legacy
-// `appointment.status_appointment` is left untouched and still updated
-// best-effort for other legacy consumers. `appointment_id` references
-// appointment/clinic/branch by plain string id, no FK, per the "never
-// alter/relate to existing tables" rule; `current_step` DOES have a real FK
-// since ref_queue_step_status is a table we own.
 model queue_status {
   queue_status_id String                @id @default(uuid()) @db.Uuid
   clinic_id       String                @db.VarChar(50)
   branch_id       String                @db.VarChar(50)
-  appointment_id  String                @db.VarChar(50) @unique
+  appointment_id  String                @unique @db.VarChar(50)
   current_step    String                @db.VarChar(30)
-  step            ref_queue_step_status @relation(fields: [current_step], references: [code])
   entered_at      DateTime              @db.Timestamp(6)
   updated_at      DateTime              @db.Timestamp(6)
   created_at      DateTime              @default(now()) @db.Timestamp(6)
+  step            ref_queue_step_status @relation(fields: [current_step], references: [code])
 
   @@index([clinic_id, branch_id])
   @@index([branch_id, current_step])
 }
 
-// New clinic-ops table: one row per branch holding the Queue page's
-// "ตั้งค่าคิววันนี้ (Advanced)" settings (columns/SLA/transitions/automation/
-// tracking/notifications/permissions tabs). JSON per tab mirrors the settings
-// modal directly; most tabs are still UI stubs with no enforcement logic yet,
-// so a rigid relational schema for them would be premature.
 model queue_config {
   queue_config_id String   @id @default(uuid()) @db.Uuid
   clinic_id       String   @db.VarChar(50)
-  branch_id       String   @db.VarChar(50) @unique
+  branch_id       String   @unique @db.VarChar(50)
   columns         Json
   sla             Json
   transitions     Json
@@ -2109,6 +2084,14 @@ model queue_config {
   created_at      DateTime @default(now()) @db.Timestamp(6)
 
   @@index([clinic_id, branch_id])
+}
+
+enum auditReferenceType {
+  QUEUE
+  APPOINTMENT
+  OPD
+  CUSTOMER
+  SYSTEM
 }
 
 enum wallet_type {
@@ -2367,24 +2350,18 @@ enum statusPrescription {
   CANCEL
 }
 
-// Extended with the granular Kanban queue steps (ARRIVED, CONSULTING,
-// PENDING_PAYMENT, ANESTHETIC, DISPENSING, VERIFIED) so every
-// ref_queue_step_status code has a 1:1 legacy counterpart and
-// `appointment.status_appointment` can be kept in exact sync (best-effort)
-// with `queue_status.current_step` instead of collapsing into a coarser
-// bucket. Additive only — existing values/rows are untouched.
 enum statusAppointment {
   APPOINT
   CONFIRM
+  IN_SERVICE
+  SUCCESS
+  CANCEL
   ARRIVED
   CONSULTING
   PENDING_PAYMENT
   ANESTHETIC
-  IN_SERVICE
   DISPENSING
   VERIFIED
-  SUCCESS
-  CANCEL
 }
 
 enum statusRemind {

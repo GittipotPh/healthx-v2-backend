@@ -102,7 +102,11 @@ export class QueueRepository {
     });
   }
 
+  /** How far back cancel/late/reschedule history counts look. */
+  private static readonly HISTORY_WINDOW_MONTHS = 12;
+
   async findCustomersHistories(
+    clinicId: string,
     customerIds: string[],
   ): Promise<
     Record<
@@ -112,10 +116,20 @@ export class QueueRepository {
   > {
     if (customerIds.length === 0) return {};
 
+    // Customer PK is composite [customer_id, clinic_id]: a bare customer_id
+    // IN (...) could match another clinic's rows, so always scope by clinic.
+    // date_appointment is a YYYY-MM-DD varchar, so a lexicographic gte bounds
+    // the window without loading every appointment ever.
+    const since = new Date();
+    since.setMonth(since.getMonth() - QueueRepository.HISTORY_WINDOW_MONTHS);
+    const sinceDate = since.toISOString().slice(0, 10);
+
     // 1. Fetch appointments of these customers to check cancellations and lateness
     const appointments = await this.prisma.appointment.findMany({
       where: {
+        clinic_id: clinicId,
         customer_id: { in: customerIds },
+        date_appointment: { gte: sinceDate },
       },
       select: {
         customer_id: true,
@@ -130,6 +144,7 @@ export class QueueRepository {
     const allApptIds = appointments.map((a) => a.appointment_id);
     const rescheduleLogs = await this.prisma.audit_log.findMany({
       where: {
+        clinic_id: clinicId,
         reference_type: "APPOINTMENT",
         action: "reschedule",
         reference_id: { in: allApptIds },

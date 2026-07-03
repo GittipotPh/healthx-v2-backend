@@ -19,6 +19,6 @@ export class OpdController {
     @Param("customerId") customerId: string,
     @Scope() scope: RequestScope,
   ): Promise<OpdView[]> {
-    return this.opdService.historyByCustomer(customerId, scope.clinicId);
+    return this.opdService.historyByCustomer(customerId, scope);
   }
 }

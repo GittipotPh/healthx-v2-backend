@@ -1,5 +1,4 @@
 import {
-  Body,
   Controller,
   ForbiddenException,
   Get,
@@ -13,7 +12,6 @@ import type { Request } from "express";
 import { role_enum } from "@prisma/client";
 import { AuditLogService, type AuditLogListResult } from "./audit-log.service";
 import type { AuditLogView } from "./audit-log.mapper";
-import { CreateAuditLogDto } from "./dto/create-audit-log.dto";
 import { QueryAuditLogDto } from "./dto/query-audit-log.dto";
 import { Scope } from "../../auth/scope.decorator";
 import type { RequestScope } from "../../auth/auth.types";
@@ -50,12 +48,8 @@ export class AuditLogController {
     return this.auditLogService.recordLogin(scope, req.ip);
   }
 
-  @Post()
-  create(@Body() dto: CreateAuditLogDto, @Scope() scope: RequestScope): Promise<AuditLogView> {
-    return this.auditLogService.create({
-      ...dto,
-      clinicId: scope.clinicId,
-      branchId: scope.branchId,
-    });
-  }
+  // No generic POST create endpoint: audit rows are written server-side only,
+  // as side effects of workflows (queue transition, appointment create) via
+  // AuditLogService with a server-derived actor. A client-facing create would
+  // let callers forge actorUserId/actorName/actorRole.
 }
