@@ -1,7 +1,16 @@
 import { Injectable } from "@nestjs/common";
-import type { appointment, Prisma, queue_status, statusAppointment } from "@prisma/client";
+import type {
+  appointment,
+  appointment_anesthetic,
+  appointment_consultation,
+  Prisma,
+  queue_status,
+  statusAppointment,
+} from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import type { AppointmentForQueue } from "./queue.mapper";
+import type { SaveConsultationDto } from "./dto/save-consultation.dto";
+import type { SaveAnestheticDto } from "./dto/save-anesthetic.dto";
 
 @Injectable()
 export class QueueRepository {
@@ -99,6 +108,70 @@ export class QueueRepository {
         entered_at: existing.current_step === stepCode ? existing.entered_at : now,
         updated_at: now,
       },
+    });
+  }
+
+  /** Upserts the consult detail record for an appointment (one row per appointment). */
+  async upsertConsultation(
+    scope: { clinicId: string; branchId: string; userId: string },
+    dto: SaveConsultationDto,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<appointment_consultation> {
+    const now = new Date();
+    const data = {
+      consultant_ref: dto.consultantRef ?? null,
+      budget: dto.budget ?? null,
+      promotion: dto.promotion ?? null,
+      outcome: dto.outcome,
+      services_interested: (dto.servicesInterested ?? []) as Prisma.InputJsonValue,
+      notes: dto.notes ?? null,
+      updated_at: now,
+    };
+    return tx.appointment_consultation.upsert({
+      where: { appointment_id: dto.appointmentId },
+      create: {
+        clinic_id: scope.clinicId,
+        branch_id: scope.branchId,
+        appointment_id: dto.appointmentId,
+        created_by: scope.userId,
+        ...data,
+      },
+      update: data,
+    });
+  }
+
+  /**
+   * Upserts the anaesthetic detail record for an appointment (one row per
+   * appointment). Every save — create or update — restarts `started_at`,
+   * because resubmitting the modal means the nurse re-applied the anaesthetic.
+   */
+  async upsertAnesthetic(
+    scope: { clinicId: string; branchId: string; userId: string },
+    dto: SaveAnestheticDto,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<appointment_anesthetic> {
+    const now = new Date();
+    const data = {
+      allergy_status: dto.allergyStatus,
+      allergy_notes: dto.allergyNotes ?? null,
+      nurse_ref: dto.nurseRef,
+      room: dto.room ?? null,
+      bed: dto.bed ?? null,
+      duration_minutes: dto.durationMinutes,
+      notes: dto.notes ?? null,
+      started_at: now,
+      updated_at: now,
+    };
+    return tx.appointment_anesthetic.upsert({
+      where: { appointment_id: dto.appointmentId },
+      create: {
+        clinic_id: scope.clinicId,
+        branch_id: scope.branchId,
+        appointment_id: dto.appointmentId,
+        created_by: scope.userId,
+        ...data,
+      },
+      update: data,
     });
   }
 

@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { AppointmentsService, type AppointmentListResult } from "./appointments.service";
 import { CreateAppointmentDto } from "./dto/create-appointment.dto";
+import { RescheduleAppointmentDto } from "./dto/reschedule-appointment.dto";
 import { QueryAppointmentOptionsDto } from "./dto/query-appointment-options.dto";
 import { QueryAppointmentsDto } from "./dto/query-appointments.dto";
 import type {
@@ -60,5 +61,14 @@ export class AppointmentsController {
     @Scope() scope: RequestScope,
   ): Promise<AppointmentOptionPage<StaffOption>> {
     return this.appointmentsService.assistantOptions(query, scope);
+  }
+
+  @Patch(":id/reschedule")
+  reschedule(
+    @Param("id") id: string,
+    @Body() dto: RescheduleAppointmentDto,
+    @Scope() scope: RequestScope,
+  ): Promise<AppointmentView> {
+    return this.appointmentsService.reschedule(id, dto, scope);
   }
 }

@@ -109,6 +109,39 @@ export class AppointmentsRepository {
     return found !== null;
   }
 
+  async findOne(id: string, scope: RequestScope): Promise<AppointmentWithCustomer | null> {
+    return this.prisma.appointment.findFirst({
+      where: {
+        appointment_id: id,
+        clinic_id: scope.clinicId,
+        branch_id: scope.branchId,
+      },
+      include: { customer: true },
+    });
+  }
+
+  async reschedule(
+    id: string,
+    data: { dateAppointment: string; startTime: string; endTime: string },
+    scope: RequestScope,
+  ): Promise<AppointmentWithCustomer> {
+    const now = new Date();
+    return this.prisma.appointment.update({
+      where: {
+        appointment_id: id,
+      },
+      data: {
+        date_appointment: data.dateAppointment,
+        start_time: data.startTime,
+        time_arrive: data.startTime,
+        end_time: data.endTime,
+        updated_at: now,
+      },
+      include: { customer: true },
+    });
+  }
+
+
   buildWhere(query: QueryAppointmentsDto, scope: RequestScope): Prisma.appointmentWhereInput {
     const where: Prisma.appointmentWhereInput = {
       clinic_id: scope.clinicId,

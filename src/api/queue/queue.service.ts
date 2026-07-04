@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { auditReferenceType } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
@@ -8,6 +8,8 @@ import { type QueueItemView, toQueueItemView } from "./queue.mapper";
 import { STEP_TO_APPOINTMENT_STATUS } from "./queue.constants";
 import type { QueryQueueDto } from "./dto/query-queue.dto";
 import type { TransitionQueueDto } from "./dto/transition-queue.dto";
+import type { SaveConsultationDto } from "./dto/save-consultation.dto";
+import type { SaveAnestheticDto } from "./dto/save-anesthetic.dto";
 import type { Principal, RequestScope } from "../../auth/auth.types";
 
 export interface QueueTodayResult {
@@ -16,6 +18,16 @@ export interface QueueTodayResult {
 }
 
 export interface QueueTransitionResult {
+  appointmentId: string;
+  audit: AuditLogView;
+}
+
+export interface QueueConsultationResult {
+  appointmentId: string;
+  audit: AuditLogView;
+}
+
+export interface QueueAnestheticResult {
   appointmentId: string;
   audit: AuditLogView;
 }
@@ -101,6 +113,146 @@ export class QueueService {
           notes: dto.notes,
           reason: dto.reason,
           metadata: dto.metadata,
+        },
+        tx,
+      );
+    });
+
+    return { appointmentId: dto.appointmentId, audit };
+  }
+
+  /**
+   * Persists the "ส่งปรึกษา" consult detail fields and advances the card to
+   * CONSULTING in one audited transaction: upsert appointment_consultation →
+   * sync status_appointment (step-derived) → upsert queue_status(CONSULTING) →
+   * exactly one audit_log entry. Mirrors `transition()`; the actor is derived
+   * server-side from scope/principal.
+   */
+  async saveConsultation(
+    dto: SaveConsultationDto,
+    scope: RequestScope,
+    principal: Principal,
+  ): Promise<QueueConsultationResult> {
+    const appointment = await this.repository.findAppointment(
+      scope.clinicId,
+      scope.branchId,
+      dto.appointmentId,
+    );
+    if (!appointment) {
+      throw new NotFoundException("Appointment not found for this clinic/branch");
+    }
+
+    const step = "CONSULTING";
+    const appointmentStatus = STEP_TO_APPOINTMENT_STATUS[step];
+    const actorRole = scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
+
+    const audit = await this.prisma.$transaction(async (tx) => {
+      await this.repository.upsertConsultation(
+        { clinicId: scope.clinicId, branchId: scope.branchId, userId: scope.userId },
+        dto,
+        tx,
+      );
+      await this.repository.updateAppointmentStatus(dto.appointmentId, appointmentStatus, tx);
+      await this.repository.upsertQueueStep(
+        scope.clinicId,
+        scope.branchId,
+        dto.appointmentId,
+        step,
+        tx,
+      );
+      return this.auditLogService.create(
+        {
+          clinicId: scope.clinicId,
+          branchId: scope.branchId,
+          referenceType: auditReferenceType.QUEUE,
+          referenceId: dto.appointmentId,
+          action: "send-to-consulting",
+          actionLabel: "ส่งปรึกษา",
+          toStatus: step,
+          actorUserId: scope.userId,
+          actorName: principal.name,
+          actorRole,
+          notes: dto.notes,
+          metadata: {
+            consultantRef: dto.consultantRef,
+            budget: dto.budget,
+            promotion: dto.promotion,
+            outcome: dto.outcome,
+            servicesInterested: dto.servicesInterested ?? [],
+          },
+        },
+        tx,
+      );
+    });
+
+    return { appointmentId: dto.appointmentId, audit };
+  }
+
+  /**
+   * Persists the "แปะยาชา" anaesthetic detail fields and keeps the card on
+   * ANESTHETIC in one audited transaction: upsert appointment_anesthetic →
+   * sync status_appointment (step-derived) → upsert queue_status(ANESTHETIC) →
+   * exactly one audit_log entry. Mirrors `saveConsultation()`; the actor is
+   * derived server-side from scope/principal.
+   */
+  async saveAnesthetic(
+    dto: SaveAnestheticDto,
+    scope: RequestScope,
+    principal: Principal,
+  ): Promise<QueueAnestheticResult> {
+    // Cross-field rule the DTO can't express: a recorded allergy needs detail.
+    if (dto.allergyStatus === "has" && !dto.allergyNotes?.trim()) {
+      throw new BadRequestException("allergyNotes is required when allergyStatus is 'has'");
+    }
+
+    const appointment = await this.repository.findAppointment(
+      scope.clinicId,
+      scope.branchId,
+      dto.appointmentId,
+    );
+    if (!appointment) {
+      throw new NotFoundException("Appointment not found for this clinic/branch");
+    }
+
+    const step = "ANESTHETIC";
+    const appointmentStatus = STEP_TO_APPOINTMENT_STATUS[step];
+    const actorRole = scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
+
+    const audit = await this.prisma.$transaction(async (tx) => {
+      await this.repository.upsertAnesthetic(
+        { clinicId: scope.clinicId, branchId: scope.branchId, userId: scope.userId },
+        dto,
+        tx,
+      );
+      await this.repository.updateAppointmentStatus(dto.appointmentId, appointmentStatus, tx);
+      await this.repository.upsertQueueStep(
+        scope.clinicId,
+        scope.branchId,
+        dto.appointmentId,
+        step,
+        tx,
+      );
+      return this.auditLogService.create(
+        {
+          clinicId: scope.clinicId,
+          branchId: scope.branchId,
+          referenceType: auditReferenceType.QUEUE,
+          referenceId: dto.appointmentId,
+          action: "apply-anesthetic",
+          actionLabel: "แปะยาชา",
+          toStatus: step,
+          actorUserId: scope.userId,
+          actorName: principal.name,
+          actorRole,
+          notes: dto.notes,
+          metadata: {
+            allergyStatus: dto.allergyStatus,
+            allergyNotes: dto.allergyNotes,
+            nurseRef: dto.nurseRef,
+            room: dto.room,
+            bed: dto.bed,
+            durationMinutes: dto.durationMinutes,
+          },
         },
         tx,
       );
