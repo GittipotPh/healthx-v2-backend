@@ -1,26 +1,66 @@
+import { ApiProperty } from "@nestjs/swagger";
 import type { customer } from "@prisma/client";
 
-export interface CustomerView {
-  customerId: string;
-  clinicId: string;
-  branchId: string;
-  title: string;
-  name: string;
-  lastname: string;
-  fullName: string;
-  nickname: string | null;
-  gender: string;
-  birthDate: string | null;
-  personalId: string;
-  phoneNumber: string | null;
-  email: string | null;
-  lineId: string | null;
-  customerImage: string | null;
-  isVip: boolean;
-  isActive: boolean;
-  customerGroup: string | null;
-  createdAt: string | null;
-  updatedAt: string | null;
+export class CustomerView {
+  @ApiProperty()
+  customerId!: string;
+
+  @ApiProperty()
+  clinicId!: string;
+
+  @ApiProperty()
+  branchId!: string;
+
+  @ApiProperty()
+  title!: string;
+
+  @ApiProperty()
+  name!: string;
+
+  @ApiProperty()
+  lastname!: string;
+
+  @ApiProperty()
+  fullName!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  nickname!: string | null;
+
+  @ApiProperty()
+  gender!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  birthDate!: string | null;
+
+  @ApiProperty({ description: "Customer HN" })
+  personalId!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  phoneNumber!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  email!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  lineId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  customerImage!: string | null;
+
+  @ApiProperty()
+  isVip!: boolean;
+
+  @ApiProperty()
+  isActive!: boolean;
+
+  @ApiProperty({ type: String, nullable: true })
+  customerGroup!: string | null;
+
+  @ApiProperty({ type: String, nullable: true, description: "ISO timestamp" })
+  createdAt!: string | null;
+
+  @ApiProperty({ type: String, nullable: true, description: "ISO timestamp" })
+  updatedAt!: string | null;
 }
 
 export function toCustomerView(row: customer): CustomerView {

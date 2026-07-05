@@ -1,23 +1,41 @@
 import { Injectable } from "@nestjs/common";
+import { ApiProperty } from "@nestjs/swagger";
 import { PrismaService } from "../prisma.service";
 import { RedisService } from "../redis/redis.service";
 
 type DependencyStatus = "ok" | "down";
 
-interface DependencyHealth {
-  status: DependencyStatus;
-  latencyMs: number;
+export class DependencyHealth {
+  @ApiProperty({ enum: ["ok", "down"], enumName: "DependencyStatus" })
+  status!: DependencyStatus;
+
+  @ApiProperty()
+  latencyMs!: number;
+
+  @ApiProperty({ required: false })
   message?: string;
 }
 
-export interface HealthResult {
-  status: "ok" | "degraded";
-  checkedAt: string;
-  dependencies: {
-    api: DependencyHealth;
-    database: DependencyHealth;
-    redis: DependencyHealth;
-  };
+export class HealthDependencies {
+  @ApiProperty({ type: DependencyHealth })
+  api!: DependencyHealth;
+
+  @ApiProperty({ type: DependencyHealth })
+  database!: DependencyHealth;
+
+  @ApiProperty({ type: DependencyHealth })
+  redis!: DependencyHealth;
+}
+
+export class HealthResult {
+  @ApiProperty({ enum: ["ok", "degraded"], enumName: "HealthStatus" })
+  status!: "ok" | "degraded";
+
+  @ApiProperty({ description: "ISO timestamp" })
+  checkedAt!: string;
+
+  @ApiProperty({ type: HealthDependencies })
+  dependencies!: HealthDependencies;
 }
 
 @Injectable()

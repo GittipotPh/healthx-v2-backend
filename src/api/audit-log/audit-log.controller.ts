@@ -9,10 +9,15 @@ import {
   Req,
 } from "@nestjs/common";
 import type { Request } from "express";
+import { ApiTags } from "@nestjs/swagger";
 import { role_enum } from "@prisma/client";
-import { AuditLogService, type AuditLogListResult } from "./audit-log.service";
-import type { AuditLogView } from "./audit-log.mapper";
+import { AuditLogService, AuditLogListResult } from "./audit-log.service";
+import { AuditLogView } from "./audit-log.mapper";
 import { QueryAuditLogDto } from "./dto/query-audit-log.dto";
+import {
+  BaseOpenApiErrorResponses,
+  BaseOpenApiResponse,
+} from "../../common/openapi/api-envelope";
 import { Scope } from "../../auth/scope.decorator";
 import type { RequestScope } from "../../auth/auth.types";
 
@@ -23,11 +28,14 @@ function canViewAudit(scope: RequestScope): boolean {
   return scope.isClinicRootUser || scope.roles.some((role) => AUDIT_VIEW_ROLES.includes(role));
 }
 
+@ApiTags("Audit Log")
+@BaseOpenApiErrorResponses()
 @Controller("clinic/audit-log")
 export class AuditLogController {
   constructor(private readonly auditLogService: AuditLogService) {}
 
   @Get()
+  @BaseOpenApiResponse(AuditLogListResult)
   list(
     @Query() query: QueryAuditLogDto,
     @Scope() scope: RequestScope,
@@ -44,6 +52,7 @@ export class AuditLogController {
    */
   @Post("login")
   @HttpCode(HttpStatus.CREATED)
+  @BaseOpenApiResponse(AuditLogView, { status: 201 })
   recordLogin(@Scope() scope: RequestScope, @Req() req: Request): Promise<AuditLogView> {
     return this.auditLogService.recordLogin(scope, req.ip);
   }

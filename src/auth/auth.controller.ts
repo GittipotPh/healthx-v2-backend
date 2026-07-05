@@ -9,8 +9,13 @@ import {
   Res,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
-import { AuthService, type SessionResult } from "./auth.service";
+import { ApiProperty, ApiTags } from "@nestjs/swagger";
+import { AuthService, SessionResult } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
+import {
+  BaseOpenApiErrorResponses,
+  BaseOpenApiResponse,
+} from "../common/openapi/api-envelope";
 import {
   REFRESH_COOKIE_NAME,
   clearAuthCookie,
@@ -22,6 +27,14 @@ import { CurrentPrincipal, NoScope, Public } from "./scope.decorator";
 import { RateLimit } from "../common/rate-limit/rate-limit.decorator";
 import type { Principal } from "./auth.types";
 
+/** Success payload of `POST /authentication/logout`. */
+export class LogoutResult {
+  @ApiProperty({ enum: [true], description: "Always true — cookies cleared" })
+  success!: true;
+}
+
+@ApiTags("Authentication")
+@BaseOpenApiErrorResponses()
 @Controller("authentication")
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
@@ -35,6 +48,7 @@ export class AuthController {
   @RateLimit({ limit: 10, windowSeconds: 60, by: "ip-email" })
   @Post("login")
   @HttpCode(HttpStatus.OK)
+  @BaseOpenApiResponse(SessionResult)
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
@@ -56,6 +70,7 @@ export class AuthController {
   @RateLimit({ limit: 30, windowSeconds: 60, by: "ip" })
   @Post("refresh")
   @HttpCode(HttpStatus.OK)
+  @BaseOpenApiResponse(SessionResult)
   async refresh(
     @Req() req: Request & { cookies?: Record<string, string> },
     @Res({ passthrough: true }) res: Response,
@@ -80,6 +95,7 @@ export class AuthController {
    */
   @NoScope()
   @Get("me")
+  @BaseOpenApiResponse(SessionResult)
   me(@CurrentPrincipal() principal: Principal): Promise<SessionResult> {
     return this.authService.session(principal.email);
   }
@@ -91,10 +107,11 @@ export class AuthController {
   @Public()
   @Post("logout")
   @HttpCode(HttpStatus.OK)
+  @BaseOpenApiResponse(LogoutResult)
   async logout(
     @Req() req: Request & { cookies?: Record<string, string> },
     @Res({ passthrough: true }) res: Response,
-  ): Promise<{ success: true }> {
+  ): Promise<LogoutResult> {
     await this.authService.logout(req.cookies?.[REFRESH_COOKIE_NAME]);
     clearAuthCookie(res);
     clearRefreshCookie(res);

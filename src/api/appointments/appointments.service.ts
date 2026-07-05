@@ -1,11 +1,12 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
+import { ApiProperty } from "@nestjs/swagger";
 import { auditReferenceType } from "@prisma/client";
 import { AppointmentOptionsRepository } from "./appointment-options.repository";
 import { AppointmentsRepository } from "./appointments.repository";
 import {
+  AppointmentView,
   type AppointmentOptionPage,
   type AppointmentOptionsView,
-  type AppointmentView,
   type BranchScopedOption,
   type StaffOption,
   toAppointmentView,
@@ -18,11 +19,18 @@ import type { RequestScope } from "../../auth/auth.types";
 import { CustomersService } from "../customers/customers.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
 
-export interface AppointmentListResult {
-  items: AppointmentView[];
-  total: number;
-  page: number;
-  pageSize: number;
+export class AppointmentListResult {
+  @ApiProperty({ type: [AppointmentView] })
+  items!: AppointmentView[];
+
+  @ApiProperty()
+  total!: number;
+
+  @ApiProperty()
+  page!: number;
+
+  @ApiProperty()
+  pageSize!: number;
 }
 
 @Injectable()

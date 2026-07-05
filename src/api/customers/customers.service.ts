@@ -1,14 +1,22 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
+import { ApiProperty } from "@nestjs/swagger";
 import { CustomersRepository } from "./customers.repository";
-import { type CustomerView, toCustomerView } from "./customers.mapper";
+import { CustomerView, toCustomerView } from "./customers.mapper";
 import type { QueryCustomersDto } from "./dto/query-customers.dto";
 import type { RequestScope } from "../../auth/auth.types";
 
-export interface CustomerListResult {
-  items: CustomerView[];
-  total: number;
-  page: number;
-  pageSize: number;
+export class CustomerListResult {
+  @ApiProperty({ type: [CustomerView] })
+  items!: CustomerView[];
+
+  @ApiProperty()
+  total!: number;
+
+  @ApiProperty()
+  page!: number;
+
+  @ApiProperty()
+  pageSize!: number;
 }
 
 @Injectable()

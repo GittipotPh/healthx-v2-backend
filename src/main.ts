@@ -1,6 +1,7 @@
 import { ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
+import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { AppModule } from "./app.module";
@@ -34,6 +35,39 @@ async function bootstrap(): Promise<void> {
 
   // Cookie auth requires explicit origins (never `*`) and credentialed requests.
   app.enableCors({ origin: allowedOrigins(), credentials: true });
+
+  // OpenAPI spec + Swagger UI — tooling only, never exposed in production.
+  // UI at /api, JSON spec at /api-json (consumed by the frontend's `pnpm codegen`).
+  if (env.NODE_ENV !== "production") {
+    const openApiConfig = new DocumentBuilder()
+      .setTitle("HealthX Clinic Operations API")
+      .setVersion("1.0")
+      .setDescription(
+        'Every response is wrapped by the global contract: success `{ status: "0000", data }`, ' +
+          'error `{ status: "8999" | "9999", message }`. Auth rides in the HttpOnly `hx_token` cookie; ' +
+          "the active clinic/branch scope is sent via the `x-clinic-id` / `x-branch-id` headers.",
+      )
+      .addCookieAuth("hx_token")
+      .addGlobalParameters(
+        {
+          name: "x-clinic-id",
+          in: "header",
+          required: false,
+          schema: { type: "string" },
+          description: "Active clinic scope (validated by ScopeGuard)",
+        },
+        {
+          name: "x-branch-id",
+          in: "header",
+          required: false,
+          schema: { type: "string" },
+          description: "Active branch scope (validated by ScopeGuard)",
+        },
+      )
+      .build();
+    const document = SwaggerModule.createDocument(app, openApiConfig);
+    SwaggerModule.setup("api", app, document);
+  }
 
   await app.listen(env.APP_PORT);
 }

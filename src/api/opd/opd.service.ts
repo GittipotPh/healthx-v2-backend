@@ -1,14 +1,22 @@
 import { Injectable } from "@nestjs/common";
+import { ApiProperty } from "@nestjs/swagger";
 import { OpdRepository } from "./opd.repository";
-import { type OpdView, toOpdView } from "./opd.mapper";
+import { OpdView, toOpdView } from "./opd.mapper";
 import type { QueryOpdDto } from "./dto/query-opd.dto";
 import type { RequestScope } from "../../auth/auth.types";
 
-export interface OpdListResult {
-  items: OpdView[];
-  total: number;
-  page: number;
-  pageSize: number;
+export class OpdListResult {
+  @ApiProperty({ type: [OpdView] })
+  items!: OpdView[];
+
+  @ApiProperty()
+  total!: number;
+
+  @ApiProperty()
+  page!: number;
+
+  @ApiProperty()
+  pageSize!: number;
 }
 
 @Injectable()

@@ -1,4 +1,6 @@
-import type { appointment, customer, customer_info, opd, statusAppointment } from "@prisma/client";
+import { ApiProperty } from "@nestjs/swagger";
+import { statusAppointment, type appointment, type customer, type customer_info, type opd } from "@prisma/client";
+import { STEP_TO_APPOINTMENT_STATUS } from "./queue.constants";
 
 export type AppointmentForQueue = appointment & {
   customer?: (customer & { customer_info?: customer_info | null }) | null;
@@ -10,39 +12,101 @@ export function stepCodeToColumnId(code: string): string {
   return code.toLowerCase().replace(/_/g, "-");
 }
 
-export type QueueStatus =
-  | "confirmed"
-  | "in-service"
-  | "completed"
-  | "cancelled"
-  | "pending";
+export const QUEUE_STATUSES = [
+  "confirmed",
+  "in-service",
+  "completed",
+  "cancelled",
+  "pending",
+] as const;
 
-export interface QueueItemView {
-  id: string;
-  appointmentId: string;
-  queueNo: string;
-  time: string;
-  hn: string;
-  name: string | null;
-  nickname: string | null;
-  phone: string | null;
-  gender: string | null;
-  doctorRoom: string | null;
-  channel: string | null;
-  status: QueueStatus;
-  appointmentStatus: statusAppointment;
-  /** Kanban column id from queue_status.current_step (e.g. "pending-payment"); null if no queue_status row exists yet (legacy/pre-bootstrap appointments). */
-  step: string | null;
-  opdId: string | null;
-  opdStatus: string | null;
-  isConsult: boolean;
-  applyAnesthetic: boolean;
-  customerImage: string | null;
-  allergies: string[];
-  appointmentDetail: string | null;
-  cancelHistory: number;
-  lateHistory: number;
-  rescheduleHistory: number;
+export type QueueStatus = (typeof QUEUE_STATUSES)[number];
+
+/** Kanban column ids: the seeded `ref_queue_step_status` catalog, lowercased/dashed. */
+export const QUEUE_STEP_COLUMNS = Object.keys(STEP_TO_APPOINTMENT_STATUS).map(stepCodeToColumnId);
+
+export class QueueItemView {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  appointmentId!: string;
+
+  @ApiProperty({ description: 'Display queue number, e.g. "Q001"' })
+  queueNo!: string;
+
+  @ApiProperty({ description: "Appointment start time (HH:mm)" })
+  time!: string;
+
+  @ApiProperty({ description: 'Customer HN (personal id); "—" placeholder when absent' })
+  hn!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  name!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  nickname!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  phone!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  gender!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  doctorRoom!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  channel!: string | null;
+
+  @ApiProperty({
+    enum: QUEUE_STATUSES,
+    enumName: "QueueStatus",
+    description: "Coarse 5-value status derived from statusAppointment (fallback when `step` is null)",
+  })
+  status!: QueueStatus;
+
+  @ApiProperty({ enum: statusAppointment, enumName: "StatusAppointment" })
+  appointmentStatus!: statusAppointment;
+
+  @ApiProperty({
+    enum: QUEUE_STEP_COLUMNS,
+    enumName: "QueueStepColumn",
+    nullable: true,
+    description:
+      'Kanban column id from queue_status.current_step (e.g. "pending-payment"); null if no queue_status row exists yet (legacy/pre-bootstrap appointments).',
+  })
+  step!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  opdId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  opdStatus!: string | null;
+
+  @ApiProperty()
+  isConsult!: boolean;
+
+  @ApiProperty()
+  applyAnesthetic!: boolean;
+
+  @ApiProperty({ type: String, nullable: true })
+  customerImage!: string | null;
+
+  @ApiProperty({ type: [String] })
+  allergies!: string[];
+
+  @ApiProperty({ type: String, nullable: true })
+  appointmentDetail!: string | null;
+
+  @ApiProperty()
+  cancelHistory!: number;
+
+  @ApiProperty()
+  lateHistory!: number;
+
+  @ApiProperty()
+  rescheduleHistory!: number;
 }
 
 // Collapses the granular statusAppointment enum into the coarse 5-value

@@ -1,14 +1,27 @@
 import { Injectable } from "@nestjs/common";
-import { record_status, type role_enum, type type_branch } from "@prisma/client";
+import { ApiProperty } from "@nestjs/swagger";
+import { record_status, role_enum, type_branch } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import type { RequestScope } from "../../auth/auth.types";
 
-export interface AccessibleBranch {
-  branchId: string;
-  branchName: string;
-  typeBranch: type_branch;
+export class AccessibleBranch {
+  @ApiProperty()
+  branchId!: string;
+
+  @ApiProperty()
+  branchName!: string;
+
+  @ApiProperty({ enum: type_branch, enumName: "TypeBranch" })
+  typeBranch!: type_branch;
+
   /** The user's role in this branch. null for a clinic-root user (full access). */
-  role: role_enum | null;
+  @ApiProperty({
+    enum: role_enum,
+    enumName: "RoleEnum",
+    nullable: true,
+    description: "The user's role in this branch; null for a clinic-root user (full access)",
+  })
+  role!: role_enum | null;
 }
 
 @Injectable()

@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { ApiProperty } from "@nestjs/swagger";
 import { auditReferenceType } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
-import type { AuditLogView } from "../audit-log/audit-log.mapper";
+import { AuditLogView } from "../audit-log/audit-log.mapper";
 import { QueueRepository } from "./queue.repository";
-import { type QueueItemView, toQueueItemView } from "./queue.mapper";
+import { QueueItemView, toQueueItemView } from "./queue.mapper";
 import { STEP_TO_APPOINTMENT_STATUS } from "./queue.constants";
 import type { QueryQueueDto } from "./dto/query-queue.dto";
 import type { TransitionQueueDto } from "./dto/transition-queue.dto";
@@ -12,24 +13,36 @@ import type { SaveConsultationDto } from "./dto/save-consultation.dto";
 import type { SaveAnestheticDto } from "./dto/save-anesthetic.dto";
 import type { Principal, RequestScope } from "../../auth/auth.types";
 
-export interface QueueTodayResult {
-  date: string;
-  items: QueueItemView[];
+export class QueueTodayResult {
+  @ApiProperty({ description: "The day shown (YYYY-MM-DD)" })
+  date!: string;
+
+  @ApiProperty({ type: [QueueItemView] })
+  items!: QueueItemView[];
 }
 
-export interface QueueTransitionResult {
-  appointmentId: string;
-  audit: AuditLogView;
+export class QueueTransitionResult {
+  @ApiProperty()
+  appointmentId!: string;
+
+  @ApiProperty({ type: AuditLogView })
+  audit!: AuditLogView;
 }
 
-export interface QueueConsultationResult {
-  appointmentId: string;
-  audit: AuditLogView;
+export class QueueConsultationResult {
+  @ApiProperty()
+  appointmentId!: string;
+
+  @ApiProperty({ type: AuditLogView })
+  audit!: AuditLogView;
 }
 
-export interface QueueAnestheticResult {
-  appointmentId: string;
-  audit: AuditLogView;
+export class QueueAnestheticResult {
+  @ApiProperty()
+  appointmentId!: string;
+
+  @ApiProperty({ type: AuditLogView })
+  audit!: AuditLogView;
 }
 
 @Injectable()

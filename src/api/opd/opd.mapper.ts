@@ -1,21 +1,47 @@
-import type { customer, opd, opdStatus } from "@prisma/client";
+import { ApiProperty } from "@nestjs/swagger";
+import { opdStatus, type customer, type opd } from "@prisma/client";
 
 export type OpdWithCustomer = opd & { customer?: customer | null };
 
-export interface OpdView {
-  opdId: string;
-  branchId: string;
-  clinicId: string;
-  customerId: string;
-  customerName: string | null;
-  chiefComplaint: string | null;
-  diagnosis: string | null;
-  details: string | null;
-  room: string | null;
-  status: opdStatus;
-  opdDate: string;
-  createdAt: string;
-  updatedAt: string;
+export class OpdView {
+  @ApiProperty()
+  opdId!: string;
+
+  @ApiProperty()
+  branchId!: string;
+
+  @ApiProperty()
+  clinicId!: string;
+
+  @ApiProperty()
+  customerId!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  customerName!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  chiefComplaint!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  diagnosis!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  details!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  room!: string | null;
+
+  @ApiProperty({ enum: opdStatus, enumName: "OpdStatus" })
+  status!: opdStatus;
+
+  @ApiProperty({ description: "ISO timestamp" })
+  opdDate!: string;
+
+  @ApiProperty({ description: "ISO timestamp" })
+  createdAt!: string;
+
+  @ApiProperty({ description: "ISO timestamp" })
+  updatedAt!: string;
 }
 
 function num(value: { toString(): string } | null): number | null {

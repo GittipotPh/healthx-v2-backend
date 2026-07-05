@@ -1,19 +1,27 @@
 import { Injectable } from "@nestjs/common";
+import { ApiProperty } from "@nestjs/swagger";
 import { auditReferenceType, type Prisma, type audit_log } from "@prisma/client";
 import {
   AuditLogRepository,
   type AuditLogCreateInput,
 } from "./audit-log.repository";
-import { type AuditLogView, toAuditLogView } from "./audit-log.mapper";
+import { AuditLogView, toAuditLogView } from "./audit-log.mapper";
 import type { QueryAuditLogDto } from "./dto/query-audit-log.dto";
 import type { RequestScope } from "../../auth/auth.types";
 import type { PrismaService } from "../../prisma.service";
 
-export interface AuditLogListResult {
-  items: AuditLogView[];
-  total: number;
-  page: number;
-  pageSize: number;
+export class AuditLogListResult {
+  @ApiProperty({ type: [AuditLogView] })
+  items!: AuditLogView[];
+
+  @ApiProperty()
+  total!: number;
+
+  @ApiProperty()
+  page!: number;
+
+  @ApiProperty()
+  pageSize!: number;
 }
 
 @Injectable()

@@ -1,26 +1,71 @@
-import type { audit_log, auditReferenceType } from "@prisma/client";
+import { ApiProperty } from "@nestjs/swagger";
+import { auditReferenceType, type audit_log } from "@prisma/client";
 
-export interface AuditLogView {
-  id: string;
-  clinicId: string;
-  branchId: string;
-  referenceType: auditReferenceType;
-  referenceId: string;
-  action: string;
-  actionLabel: string;
-  fromStatus: string | null;
-  toStatus: string | null;
-  actorUserId: string;
-  actorName: string | null;
-  actorRole: string | null;
-  onBehalfOfUserId: string | null;
-  onBehalfOfName: string | null;
-  durationSec: number | null;
-  notes: string | null;
-  reason: string | null;
-  ipAddress: string | null;
-  metadata: unknown;
-  createdAt: string;
+export class AuditLogView {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  clinicId!: string;
+
+  @ApiProperty()
+  branchId!: string;
+
+  @ApiProperty({ enum: auditReferenceType, enumName: "AuditReferenceType" })
+  referenceType!: auditReferenceType;
+
+  @ApiProperty()
+  referenceId!: string;
+
+  @ApiProperty({ description: 'Machine action key, e.g. "check-in"' })
+  action!: string;
+
+  @ApiProperty({ description: 'Human-readable Thai label, e.g. "มาถึงแล้ว"' })
+  actionLabel!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  fromStatus!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  toStatus!: string | null;
+
+  @ApiProperty()
+  actorUserId!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  actorName!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  actorRole!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  onBehalfOfUserId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  onBehalfOfName!: string | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  durationSec!: number | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  notes!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  reason!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  ipAddress!: string | null;
+
+  @ApiProperty({
+    type: "object",
+    additionalProperties: true,
+    nullable: true,
+    description: "Free-form action metadata recorded by the workflow",
+  })
+  metadata!: unknown;
+
+  @ApiProperty({ description: "ISO timestamp" })
+  createdAt!: string;
 }
 
 export function toAuditLogView(row: audit_log): AuditLogView {

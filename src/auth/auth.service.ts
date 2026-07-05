@@ -1,5 +1,6 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+import { ApiProperty } from "@nestjs/swagger";
 import { createHash } from "crypto";
 import * as argon2 from "argon2";
 import { record_status, type Prisma } from "@prisma/client";
@@ -7,23 +8,38 @@ import { PrismaService } from "../prisma.service";
 import { RefreshSessionService } from "./refresh-session.service";
 import type { JwtPrincipalPayload } from "./auth.types";
 
-export interface LoginClinic {
-  clinicId: string;
-  clinicName: string;
-  isClinicRootUser: boolean;
+export class LoginClinic {
+  @ApiProperty()
+  clinicId!: string;
+
+  @ApiProperty()
+  clinicName!: string;
+
+  @ApiProperty()
+  isClinicRootUser!: boolean;
 }
 
-export interface LoginProfile {
-  email: string;
-  title: string;
-  name: string;
-  lastname: string;
+export class LoginProfile {
+  @ApiProperty()
+  email!: string;
+
+  @ApiProperty()
+  title!: string;
+
+  @ApiProperty()
+  name!: string;
+
+  @ApiProperty()
+  lastname!: string;
 }
 
 /** Non-sensitive session payload returned to the browser (no token). */
-export interface SessionResult {
-  profile: LoginProfile;
-  clinics: LoginClinic[];
+export class SessionResult {
+  @ApiProperty({ type: LoginProfile })
+  profile!: LoginProfile;
+
+  @ApiProperty({ type: [LoginClinic] })
+  clinics!: LoginClinic[];
 }
 
 /** Login/refresh add the tokens, which the controller turns into cookies. */
