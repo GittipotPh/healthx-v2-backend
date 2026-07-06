@@ -1,11 +1,12 @@
 import { Injectable } from "@nestjs/common";
-import type { Prisma, customer } from "@prisma/client";
+import { record_status, type Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import type { QueryCustomersDto } from "./dto/query-customers.dto";
 import type { RequestScope } from "../../auth/auth.types";
+import type { CustomerWithCardRelations } from "./customers.mapper";
 
 export interface PaginatedCustomers {
-  items: customer[];
+  items: CustomerWithCardRelations[];
   total: number;
   page: number;
   pageSize: number;
@@ -23,6 +24,55 @@ export class CustomersRepository {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.customer.findMany({
         where,
+        include: {
+          attendant_detail: {
+            select: { name: true, lastname: true, nickname: true },
+          },
+          customer_attendant: {
+            where: { status: record_status.ACTIVE },
+            include: {
+              user: { select: { name: true, lastname: true, nickname: true } },
+            },
+            take: 1,
+          },
+          documents_signed_customer: {
+            select: { status: true },
+          },
+          customer_coures: {
+            include: {
+              course_item: { select: { name: true } },
+            },
+            orderBy: { created_at: "desc" },
+          },
+          customer_course_usage_log: {
+            select: {
+              item_id: true,
+              expire_date: true,
+              amount: true,
+              status: true,
+            },
+          },
+          customer_wallet: {
+            select: {
+              amount: true,
+              bonus: true,
+              status: true,
+            },
+          },
+          wallet_log: {
+            select: {
+              in: true,
+              out: true,
+            },
+          },
+          sale_order: {
+            select: {
+              totalDue: true,
+              sale_order_status: true,
+              status: true,
+            },
+          },
+        },
         orderBy: { created_at: "desc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -33,9 +83,58 @@ export class CustomersRepository {
     return { items, total, page, pageSize };
   }
 
-  async findOne(customerId: string, clinicId: string): Promise<customer | null> {
+  async findOne(customerId: string, clinicId: string): Promise<CustomerWithCardRelations | null> {
     return this.prisma.customer.findUnique({
       where: { customer_id_clinic_id: { customer_id: customerId, clinic_id: clinicId } },
+      include: {
+        attendant_detail: {
+          select: { name: true, lastname: true, nickname: true },
+        },
+        customer_attendant: {
+          where: { status: record_status.ACTIVE },
+          include: {
+            user: { select: { name: true, lastname: true, nickname: true } },
+          },
+          take: 1,
+        },
+        documents_signed_customer: {
+          select: { status: true },
+        },
+        customer_coures: {
+          include: {
+            course_item: { select: { name: true } },
+          },
+          orderBy: { created_at: "desc" },
+        },
+        customer_course_usage_log: {
+          select: {
+            item_id: true,
+            expire_date: true,
+            amount: true,
+            status: true,
+          },
+        },
+        customer_wallet: {
+          select: {
+            amount: true,
+            bonus: true,
+            status: true,
+          },
+        },
+        wallet_log: {
+          select: {
+            in: true,
+            out: true,
+          },
+        },
+        sale_order: {
+          select: {
+            totalDue: true,
+            sale_order_status: true,
+            status: true,
+          },
+        },
+      },
     });
   }
 
