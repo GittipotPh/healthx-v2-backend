@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { RedisService } from "../redis/redis.service";
 import { refreshTtlSeconds } from "./auth.cookie";
@@ -20,6 +20,8 @@ import { refreshTtlSeconds } from "./auth.cookie";
  */
 @Injectable()
 export class RefreshSessionService {
+  private readonly logger = new Logger(RefreshSessionService.name);
+
   constructor(private readonly redis: RedisService) {}
 
   private key(sessionId: string): string {
@@ -72,6 +74,12 @@ export class RefreshSessionService {
 
     if (result === "MISSING") throw new UnauthorizedException("Refresh session not found");
     if (result === "REUSE") {
+      // Possible stolen-token replay — the strongest compromise signal we have
+      // (OWASP A09): alert on this event in the log sink, don't just count it.
+      this.logger.warn({
+        event: "auth.refresh_reuse_detected",
+        sessionId: parsed.sessionId,
+      });
       throw new UnauthorizedException("Refresh token reuse detected — session revoked");
     }
     return { email: result, token: `${parsed.sessionId}.${newSecret}` };

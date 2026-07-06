@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { ApiProperty } from "@nestjs/swagger";
 import { auditReferenceType, type Prisma, type audit_log } from "@prisma/client";
 import {
@@ -26,7 +26,24 @@ export class AuditLogListResult {
 
 @Injectable()
 export class AuditLogService {
+  // Every audit write is mirrored to the structured logger (OWASP A09): the DB
+  // row is the queryable record, the stdout JSON line is the off-site copy an
+  // attacker with DB credentials cannot delete.
+  private readonly logger = new Logger(AuditLogService.name);
+
   constructor(private readonly repository: AuditLogRepository) {}
+
+  private mirror(input: AuditLogCreateInput): void {
+    this.logger.log({
+      event: "audit.recorded",
+      action: input.action,
+      referenceType: input.referenceType,
+      referenceId: input.referenceId,
+      clinicId: input.clinicId,
+      branchId: input.branchId,
+      actorUserId: input.actorUserId,
+    });
+  }
 
   async list(query: QueryAuditLogDto, scope: RequestScope): Promise<AuditLogListResult> {
     const result = await this.repository.findMany(query, scope);
@@ -43,6 +60,7 @@ export class AuditLogService {
     tx?: Prisma.TransactionClient | PrismaService,
   ): Promise<AuditLogView> {
     const created = await this.repository.create(input, tx);
+    this.mirror(input);
     return toAuditLogView(created);
   }
 
@@ -53,7 +71,7 @@ export class AuditLogService {
    */
   async recordLogin(scope: RequestScope, ipAddress?: string): Promise<AuditLogView> {
     const actorName = await this.repository.findActorName(scope.userId);
-    const created = await this.repository.create({
+    const input: AuditLogCreateInput = {
       clinicId: scope.clinicId,
       branchId: scope.branchId,
       referenceType: auditReferenceType.SYSTEM,
@@ -65,7 +83,9 @@ export class AuditLogService {
       actorRole: scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined),
       ipAddress,
       notes: `${actorName ?? scope.userId} เข้าสู่ระบบสำเร็จ`,
-    });
+    };
+    const created = await this.repository.create(input);
+    this.mirror(input);
     return toAuditLogView(created);
   }
 
@@ -76,8 +96,22 @@ export class AuditLogService {
    */
   async record(input: AuditLogCreateInput): Promise<audit_log | null> {
     try {
-      return await this.repository.create(input);
-    } catch {
+      const created = await this.repository.create(input);
+      this.mirror(input);
+      return created;
+    } catch (error) {
+      // Non-fatal by contract, but never silent: a failed audit write is itself
+      // a security event — and the mirror line preserves the entry off-site.
+      this.logger.error({
+        event: "audit.write_failed",
+        action: input.action,
+        referenceType: input.referenceType,
+        referenceId: input.referenceId,
+        clinicId: input.clinicId,
+        branchId: input.branchId,
+        actorUserId: input.actorUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }

@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { LoggerModule } from "nestjs-pino";
 import { PrismaModule } from "./prisma.module";
 import { RedisModule } from "./redis/redis.module";
 import { AuthModule } from "./auth/auth.module";
@@ -12,6 +13,28 @@ import { HealthModule } from "./health/health.module";
 
 @Module({
   imports: [
+    // Structured JSON logging (OWASP A09). Stdout is streamed by the platform
+    // (Azure Container Apps → Log Analytics), which is the off-site, DB-independent
+    // copy of every security event — keep security-relevant logs going through
+    // this logger, never console.*. Tokens must never be logged: the auth cookie
+    // and Authorization header are redacted at the transport level.
+    LoggerModule.forRoot({
+      pinoHttp: {
+        level: process.env.LOG_LEVEL ?? "info",
+        redact: {
+          paths: [
+            "req.headers.authorization",
+            "req.headers.cookie",
+            'res.headers["set-cookie"]',
+          ],
+          remove: true,
+        },
+        // Per-request access logs for API routes; health probes only add noise.
+        autoLogging: {
+          ignore: (req) => req.url?.includes("/health") ?? false,
+        },
+      },
+    }),
     PrismaModule,
     RedisModule,
     AuthModule,

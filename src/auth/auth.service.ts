@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { ApiProperty } from "@nestjs/swagger";
 import { createHash } from "crypto";
@@ -58,6 +58,11 @@ type UserWithClinic = Prisma.userGetPayload<{ include: { clinic: true } }>;
  */
 @Injectable()
 export class AuthService {
+  // Security events (OWASP A09): structured, machine-parseable `event` fields so
+  // the off-site log sink can alert on failed-login bursts. Never log passwords
+  // or hashes; the email is needed to investigate credential stuffing.
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -80,6 +85,7 @@ export class AuthService {
       .map(({ user }) => user);
 
     if (matched.length === 0) {
+      this.logger.warn({ event: "auth.login_failed", email });
       throw new UnauthorizedException("Invalid email or password");
     }
 
@@ -114,6 +120,7 @@ export class AuthService {
     });
     if (matched.length === 0) {
       // Account deactivated since the session was issued — kill the session.
+      this.logger.warn({ event: "auth.session_invalidated", email });
       await this.refreshSessions.revoke(rawRefreshToken);
       throw new UnauthorizedException("Session is no longer valid");
     }

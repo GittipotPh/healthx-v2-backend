@@ -24,7 +24,8 @@
     "prisma:b2b:seed": "node --env-file-if-exists=.env --import tsx prisma-b2b/b2b_seed.ts",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test:unit && pnpm build"
+    "audit": "pnpm audit --prod --audit-level=high",
+    "verify": "pnpm audit --prod --audit-level=high && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm build"
   },
   "dependencies": {
     "@golevelup/nestjs-rabbitmq": "^5.0.0",
@@ -64,10 +65,11 @@
     "moment": "^2.30.1",
     "nestjs-pino": "^4.0.0",
     "node-fetch": "^3.3.2",
-    "nodemailer": "^8.0.11",
+    "nodemailer": "^9.0.3",
     "numeral": "^2.0.6",
     "pg": "^8.16.0",
     "pino": "^10.0.0",
+    "pino-http": "^11.0.0",
     "prisma": "^7.0.0",
     "rxjs": "^7.8.2",
     "socket.io": "^4.0.0",

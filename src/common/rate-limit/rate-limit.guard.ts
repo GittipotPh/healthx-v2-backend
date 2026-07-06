@@ -70,6 +70,12 @@ export class RateLimitGuard implements CanActivate {
     }
 
     if (count > options.limit) {
+      this.logger.warn({
+        event: "ratelimit.exceeded",
+        bucket,
+        limit: options.limit,
+        windowSeconds: options.windowSeconds,
+      });
       const retryAfter = await this.ttl(bucket, options.windowSeconds);
       response.setHeader("Retry-After", String(retryAfter));
       throw new HttpException(

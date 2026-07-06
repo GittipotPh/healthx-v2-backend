@@ -3,6 +3,7 @@ import {
   type ExecutionContext,
   ForbiddenException,
   Injectable,
+  Logger,
 } from "@nestjs/common";
 import type { Request } from "express";
 import { allowedOrigins } from "../../common/origins";
@@ -22,6 +23,7 @@ const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
  */
 @Injectable()
 export class OriginGuard implements CanActivate {
+  private readonly logger = new Logger(OriginGuard.name);
   private readonly allowed = allowedOrigins();
 
   canActivate(context: ExecutionContext): boolean {
@@ -39,12 +41,25 @@ export class OriginGuard implements CanActivate {
       // checks) that still has to pass authentication downstream. A request
       // that DOES carry cookies without an origin is rejected as suspect.
       if (request.headers.cookie) {
+        this.logger.warn({
+          event: "csrf.origin_rejected",
+          reason: "cookies-without-origin",
+          method: request.method,
+          path: request.path,
+        });
         throw new ForbiddenException("Missing request origin");
       }
       return true;
     }
 
     if (!this.allowed.includes(origin)) {
+      this.logger.warn({
+        event: "csrf.origin_rejected",
+        reason: "origin-not-allowed",
+        origin,
+        method: request.method,
+        path: request.path,
+      });
       throw new ForbiddenException("Request origin is not allowed");
     }
     return true;

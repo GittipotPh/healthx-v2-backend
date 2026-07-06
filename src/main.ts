@@ -4,6 +4,7 @@ import type { NestExpressApplication } from "@nestjs/platform-express";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
+import { Logger } from "nestjs-pino";
 import { AppModule } from "./app.module";
 import { ResponseInterceptor } from "./common/interceptors/response.interceptor";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
@@ -12,7 +13,12 @@ import { backendEnv } from "./env";
 
 async function bootstrap(): Promise<void> {
   const env = backendEnv();
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    // Buffer logs until the pino logger below takes over, so even bootstrap
+    // lines come out as structured JSON.
+    bufferLogs: true,
+  });
+  app.useLogger(app.get(Logger));
 
   // Behind Azure's reverse proxy: trust the first hop so req.ip / X-Forwarded-For
   // reflect the real client (used by the rate limiter), not the proxy.

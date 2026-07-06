@@ -11,3 +11,10 @@ allowBuilds:
   msgpackr-extract: false
   prisma: false
   unrs-resolver: false
+
+# Security overrides — each entry notes the advisory it closes; remove once the
+# parent dependency ships the patched version on its own.
+overrides:
+  # GHSA-72gw-mp4g-v24j (high): multer DoS via nested field names, pulled in
+  # transitively by @nestjs/platform-express (fixed >=2.2.0).
+  multer: ">=2.2.0"
