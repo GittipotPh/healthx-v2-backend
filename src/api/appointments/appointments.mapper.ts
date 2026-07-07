@@ -3,11 +3,36 @@ import {
   role_enum,
   statusAppointment,
   type_branch,
-  type appointment,
   type customer,
 } from "@prisma/client";
 
-export type AppointmentWithCustomer = appointment & { customer?: customer | null };
+type AppointmentCustomer = Pick<customer, "name" | "lastname">;
+
+export interface AppointmentWithCustomer {
+  appointment_id: string;
+  clinic_id: string;
+  branch_id: string;
+  customer_id: string;
+  user_create: string;
+  room: string | null;
+  channel: string | null;
+  date_appointment: string;
+  time_arrive: string;
+  start_time: string;
+  end_time: string;
+  is_consult: boolean;
+  apply_anesthetic: boolean;
+  appointment_detail: string | null;
+  status_appointment: statusAppointment;
+  opd_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+  campaign?: string | null;
+  numbing_time?: number | null;
+  preparation?: string | null;
+  internal_note?: string | null;
+  customer?: AppointmentCustomer | null;
+}
 
 export class AppointmentView {
   @ApiProperty()
@@ -52,6 +77,18 @@ export class AppointmentView {
   @ApiProperty({ type: String, nullable: true })
   detail!: string | null;
 
+  @ApiProperty({ type: String, nullable: true })
+  campaign!: string | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  numbingTime!: number | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  preparation!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  internalNote!: string | null;
+
   @ApiProperty({ enum: statusAppointment, enumName: "StatusAppointment" })
   status!: statusAppointment;
 
@@ -85,6 +122,10 @@ export function toAppointmentView(row: AppointmentWithCustomer): AppointmentView
     isConsult: row.is_consult,
     applyAnesthetic: row.apply_anesthetic,
     detail: row.appointment_detail,
+    campaign: row.campaign ?? null,
+    numbingTime: row.numbing_time ?? null,
+    preparation: row.preparation ?? null,
+    internalNote: row.internal_note ?? null,
     status: row.status_appointment,
     opdId: row.opd_id,
     createdAt: row.created_at.toISOString(),

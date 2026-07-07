@@ -248,6 +248,27 @@ Repositories should:
 - Use typed query inputs and typed return values.
 - Never write to HealthX SaaS source tables unless explicitly approved.
 
+**List-endpoint includes must be bounded (added 2026-07-07).** A paginated list query
+must never `include` an unbounded relation just so the mapper can reduce it to an
+aggregate. `CustomersRepository.findMany` is the cautionary example (refactor-plan #49):
+it loads *all* `sale_order`/`wallet_log`/`customer_course_usage_log` rows per customer to
+compute outstanding/deposit on a card — response time grows with clinic history forever.
+Instead: compute aggregates in SQL (`groupBy`/`aggregate` over the page's ids, same
+`$transaction`) or cap the relation with `take:` + a minimal `select`. Rule of thumb:
+the row count a list endpoint touches must be O(pageSize), not O(clinic history).
+
+**Options/lookup endpoint conventions (2026-07-07, from the filter-options review):**
+
+- Always paginated with a capped `pageSize` (≤100) and DTO-validated `search`/`branchId`
+  — `QueryAppointmentOptionsDto` is the template.
+- Re-validate the requested branch against `BranchAccessService` (never trust
+  `branchId` from the client) — as `resolveOptionBranchIds` does.
+- Don't wrap a single query in `$transaction` (only pair `findMany` + `count`).
+- Give staff/name lists a deterministic name `orderBy`, not just branch/role.
+- Search is ILIKE `contains` and **cannot be index-accelerated** — we never add indexes
+  to HealthX-owned tables. Debounce client-side + cap pageSize; do not touch the shared
+  schema to "fix" this.
+
 ## DTO and Validation Rules
 
 Use DTOs with class-validator/class-transformer if this is the existing project convention.

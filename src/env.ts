@@ -15,6 +15,17 @@ export interface BackendEnv {
   REFRESH_TTL_DAYS: number;
   REDIS_URL: string;
   WEB_BASE_URL: string;
+  STORAGE_PROVIDER: "minio" | "azure";
+  STORAGE_BUCKET: string;
+  STORAGE_PUBLIC_BASE_URL?: string;
+  S3_ENDPOINT?: string;
+  S3_REGION?: string;
+  S3_ACCESS_KEY_ID?: string;
+  S3_SECRET_ACCESS_KEY?: string;
+  S3_FORCE_PATH_STYLE: boolean;
+  AZURE_STORAGE_CONNECTION_STRING?: string;
+  AZURE_BLOB_CONTAINER?: string;
+  CUSTOMER_FILE_MAX_BYTES: number;
   CORS_ORIGINS?: string;
   AUTH_COOKIE_DOMAIN?: string;
 }
@@ -37,6 +48,45 @@ const schema = Joi.object<BackendEnv>({
     .uri({ scheme: ["redis", "rediss"] })
     .default("redis://localhost:6379"),
   WEB_BASE_URL: Joi.string().uri().default("http://localhost:3000"),
+  STORAGE_PROVIDER: Joi.string().valid("minio", "azure").default("minio"),
+  STORAGE_BUCKET: Joi.string().min(3).default("healthx-local"),
+  STORAGE_PUBLIC_BASE_URL: Joi.string().uri().optional(),
+  S3_ENDPOINT: Joi.when("STORAGE_PROVIDER", {
+    is: "minio",
+    then: Joi.string().uri().default("http://localhost:9000"),
+    otherwise: Joi.string().optional(),
+  }),
+  S3_REGION: Joi.when("STORAGE_PROVIDER", {
+    is: "minio",
+    then: Joi.string().default("us-east-1"),
+    otherwise: Joi.string().optional(),
+  }),
+  S3_ACCESS_KEY_ID: Joi.when("STORAGE_PROVIDER", {
+    is: "minio",
+    then: Joi.string().default("minioadmin"),
+    otherwise: Joi.string().optional(),
+  }),
+  S3_SECRET_ACCESS_KEY: Joi.when("STORAGE_PROVIDER", {
+    is: "minio",
+    then: Joi.string().default("minioadmin"),
+    otherwise: Joi.string().optional(),
+  }),
+  S3_FORCE_PATH_STYLE: Joi.boolean().default(true),
+  AZURE_STORAGE_CONNECTION_STRING: Joi.when("STORAGE_PROVIDER", {
+    is: "azure",
+    then: Joi.string().required(),
+    otherwise: Joi.string().optional(),
+  }),
+  AZURE_BLOB_CONTAINER: Joi.when("STORAGE_PROVIDER", {
+    is: "azure",
+    then: Joi.string().min(3).default("healthx-local"),
+    otherwise: Joi.string().optional(),
+  }),
+  CUSTOMER_FILE_MAX_BYTES: Joi.number()
+    .integer()
+    .min(1)
+    .max(25 * 1024 * 1024)
+    .default(10 * 1024 * 1024),
   CORS_ORIGINS: Joi.when("NODE_ENV", {
     is: "production",
     then: Joi.string().required(),

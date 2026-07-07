@@ -215,4 +215,60 @@ describe("AppointmentsRepository.create", () => {
     });
     expect(created).toBe(row);
   });
+
+  it("stores optional appointment detail extras in the app-owned side table", async () => {
+    const row = appointmentRow();
+    const extra = {
+      appointment_id: "appt-1",
+      campaign: "new-year-campaign",
+      numbing_time: 30,
+      preparation: "Avoid vitamins",
+      internal_note: "VIP customer",
+    };
+    const tx = {
+      appointment: { create: jest.fn().mockResolvedValue(row) },
+      appointment_detail_extra: { create: jest.fn().mockResolvedValue(extra) },
+      queue_status: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      $transaction: jest.fn(async (callback: (t: typeof tx) => Promise<unknown>) => callback(tx)),
+    } as unknown as PrismaService;
+    const repository = new AppointmentsRepository(prisma);
+
+    const created = await repository.create(
+      validDto({
+        campaign: "new-year-campaign",
+        numbingTime: 30,
+        preparation: "Avoid vitamins",
+        internalNote: "VIP customer",
+      }),
+      SCOPE,
+    );
+
+    const appointmentId = (tx.appointment.create.mock.calls[0][0] as {
+      data: { appointment_id: string };
+    }).data.appointment_id;
+    expect(tx.appointment_detail_extra.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          appointment_id: appointmentId,
+          clinic_id: SCOPE.clinicId,
+          branch_id: SCOPE.branchId,
+          campaign: "new-year-campaign",
+          numbing_time: 30,
+          preparation: "Avoid vitamins",
+          internal_note: "VIP customer",
+          created_by: SCOPE.userId,
+        }),
+      }),
+    );
+    expect(created).toEqual(
+      expect.objectContaining({
+        campaign: "new-year-campaign",
+        numbing_time: 30,
+        preparation: "Avoid vitamins",
+        internal_note: "VIP customer",
+      }),
+    );
+  });
 });

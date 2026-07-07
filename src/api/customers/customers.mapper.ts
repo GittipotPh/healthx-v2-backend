@@ -152,6 +152,32 @@ export class CustomerView {
   card!: CustomerCardSummary | null;
 }
 
+export class CustomerOption {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  label!: string;
+}
+
+export class CustomerGroupOption extends CustomerOption {
+  @ApiProperty({ type: String, nullable: true })
+  color!: string | null;
+}
+
+export class CustomerAttendantOption extends CustomerOption {
+  @ApiProperty({ type: String, nullable: true })
+  nickname!: string | null;
+}
+
+export class CustomerOptionsView {
+  @ApiProperty({ type: [CustomerGroupOption] })
+  groups!: CustomerGroupOption[];
+
+  @ApiProperty({ type: [CustomerAttendantOption] })
+  attendants!: CustomerAttendantOption[];
+}
+
 function attendantName(row: CustomerWithCardRelations): string | null {
   const attendant = row.attendant_detail ?? row.customer_attendant?.[0]?.user ?? null;
   if (!attendant) return null;

@@ -1,11 +1,38 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { statusAppointment, type appointment, type customer, type customer_info, type opd } from "@prisma/client";
+import { statusAppointment, type customer_info } from "@prisma/client";
 import { STEP_TO_APPOINTMENT_STATUS } from "./queue.constants";
 
-export type AppointmentForQueue = appointment & {
-  customer?: (customer & { customer_info?: customer_info | null }) | null;
-  opd?: opd | null;
-};
+export interface AppointmentRecord {
+  appointment_id: string;
+  clinic_id: string;
+  branch_id: string;
+  customer_id: string;
+  room: string | null;
+  channel: string | null;
+  date_appointment: string;
+  time_arrive: string;
+  start_time: string;
+  end_time: string;
+  is_consult: boolean;
+  apply_anesthetic: boolean;
+  appointment_detail: string | null;
+  status_appointment: statusAppointment;
+  opd_id: string | null;
+}
+
+export interface AppointmentForQueue extends AppointmentRecord {
+  customer?: {
+    name: string;
+    lastname: string;
+    personal_id: string;
+    nickname: string | null;
+    phone_number: string | null;
+    gender: string;
+    customer_image: string | null;
+    customer_info?: Pick<customer_info, "allergy"> | null;
+  } | null;
+  opd?: { status_opd: string } | null;
+}
 
 /** `ref_queue_step_status.code` (e.g. "PENDING_PAYMENT") -> Kanban column id ("pending-payment"). */
 export function stepCodeToColumnId(code: string): string {

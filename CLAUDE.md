@@ -128,8 +128,12 @@ scoped, appointment-create validates date/time formats + `opdId` scope, and
 `findCustomersHistories` is clinic-scoped with a 12-month window and the queue
 HN fallback is a `"—"` placeholder, never `customer_id` — Session 5, 2026-07-02).
 Top remaining items: fetch-then-check scoping in `queue.repository.findAppointment`
-(#12) and the audit-in-tx vs best-effort policy decision (#28). See `AGENTS.md`'s
-"Database Client and Transaction Rules", "DTO and Validation Rules", and "Security
+(#12), the audit-in-tx vs best-effort policy decision (#28), and — from the 2026-07-07
+filter-options review — `CustomersRepository.findMany`'s unbounded relation includes
+(#49, the main list-perf bug: loads every sale_order/wallet_log per customer to compute
+card aggregates; aggregate in SQL instead) plus options-endpoint nits (#50). See
+`AGENTS.md`'s "Database Client and Transaction Rules", "DTO and Validation Rules",
+"Repository Rules" (bounded-includes + options-endpoint conventions), and "Security
 Rules" for the standing rules these findings turned into.
 
 ## Validation Commands

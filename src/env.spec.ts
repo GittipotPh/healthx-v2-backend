@@ -24,6 +24,25 @@ describe("env", () => {
     expect(env.JWT_EXPIRES_IN_SECONDS).toBe(600);
     expect(env.REFRESH_TTL_DAYS).toBe(7);
     expect(env.REDIS_URL).toBe("redis://localhost:6379");
+    expect(env.STORAGE_PROVIDER).toBe("minio");
+    expect(env.STORAGE_BUCKET).toBe("healthx-local");
+    expect(env.S3_ENDPOINT).toBe("http://localhost:9000");
+  });
+
+  it("requires Azure storage connection details when Azure is selected", () => {
+    expect(() => validateEnv({ ...BASE_ENV, STORAGE_PROVIDER: "azure" })).toThrow(
+      /AZURE_STORAGE_CONNECTION_STRING/,
+    );
+
+    const env = validateEnv({
+      ...BASE_ENV,
+      STORAGE_PROVIDER: "azure",
+      AZURE_STORAGE_CONNECTION_STRING:
+        "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=testkey;EndpointSuffix=core.windows.net",
+      AZURE_BLOB_CONTAINER: "healthx-dev",
+    });
+    expect(env.STORAGE_PROVIDER).toBe("azure");
+    expect(env.AZURE_BLOB_CONTAINER).toBe("healthx-dev");
   });
 
   it("requires explicit CORS origins in production", () => {

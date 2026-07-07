@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { LoggerModule } from "nestjs-pino";
 import { PrismaModule } from "./prisma.module";
 import { RedisModule } from "./redis/redis.module";
+import { StorageModule } from "./common/storage/storage.module";
 import { AuthModule } from "./auth/auth.module";
 import { ClinicModule } from "./api/clinic/clinic.module";
 import { AuditLogModule } from "./api/audit-log/audit-log.module";
@@ -37,6 +38,7 @@ import { HealthModule } from "./health/health.module";
     }),
     PrismaModule,
     RedisModule,
+    StorageModule,
     AuthModule,
     ClinicModule,
     AuditLogModule,

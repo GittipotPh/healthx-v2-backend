@@ -1,8 +1,16 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
-import { IsBooleanString, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { IsBooleanString, IsIn, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+
+export const CUSTOMER_PAYMENT_FILTERS = ["outstanding", "deposit", "clear"] as const;
+export type CustomerPaymentFilter = (typeof CUSTOMER_PAYMENT_FILTERS)[number];
 
 export class QueryCustomersDto {
+  @ApiPropertyOptional({ description: "Registered branch id" })
+  @IsOptional()
+  @IsString()
+  branchId?: string;
+
   /** Free-text search across name, lastname, nickname, phone, personal id. */
   @ApiPropertyOptional({ description: "Free-text search across name, lastname, nickname, phone, personal id" })
   @IsOptional()
@@ -14,6 +22,21 @@ export class QueryCustomersDto {
   @IsOptional()
   @IsBooleanString()
   vip?: string;
+
+  @ApiPropertyOptional({ description: "Customer group id" })
+  @IsOptional()
+  @IsString()
+  groupId?: string;
+
+  @ApiPropertyOptional({ enum: CUSTOMER_PAYMENT_FILTERS, description: "Filter by customer payment summary" })
+  @IsOptional()
+  @IsIn(CUSTOMER_PAYMENT_FILTERS)
+  paymentStatus?: CustomerPaymentFilter;
+
+  @ApiPropertyOptional({ description: "Customer attendant user id" })
+  @IsOptional()
+  @IsString()
+  attendantId?: string;
 
   @ApiPropertyOptional({ minimum: 1, default: 1 })
   @IsOptional()

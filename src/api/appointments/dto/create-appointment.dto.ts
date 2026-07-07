@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsBoolean, IsOptional, IsString, Matches, MaxLength } from "class-validator";
+import { IsArray, IsBoolean, IsInt, IsOptional, IsString, Matches, MaxLength } from "class-validator";
 
 /**
  * Date/time columns on the legacy `appointment` table are VARCHAR and are
@@ -74,4 +74,43 @@ export class CreateAppointmentDto {
   @IsOptional()
   @IsString()
   opdId?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  doctors?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  assistants?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  procedures?: string[];
+
+  @ApiPropertyOptional({ maxLength: 120 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  campaign?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  numbingTime?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  preparation?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  internalNote?: string;
 }

@@ -1,6 +1,5 @@
 import { Injectable } from "@nestjs/common";
 import type {
-  appointment,
   appointment_anesthetic,
   appointment_consultation,
   Prisma,
@@ -8,9 +7,44 @@ import type {
   statusAppointment,
 } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
-import type { AppointmentForQueue } from "./queue.mapper";
+import type { AppointmentForQueue, AppointmentRecord } from "./queue.mapper";
 import type { SaveConsultationDto } from "./dto/save-consultation.dto";
 import type { SaveAnestheticDto } from "./dto/save-anesthetic.dto";
+
+const APPOINTMENT_RECORD_SELECT = {
+  appointment_id: true,
+  clinic_id: true,
+  branch_id: true,
+  customer_id: true,
+  room: true,
+  channel: true,
+  date_appointment: true,
+  time_arrive: true,
+  start_time: true,
+  end_time: true,
+  is_consult: true,
+  apply_anesthetic: true,
+  appointment_detail: true,
+  status_appointment: true,
+  opd_id: true,
+} satisfies Prisma.appointmentSelect;
+
+const QUEUE_APPOINTMENT_SELECT = {
+  ...APPOINTMENT_RECORD_SELECT,
+  customer: {
+    select: {
+      name: true,
+      lastname: true,
+      personal_id: true,
+      nickname: true,
+      phone_number: true,
+      gender: true,
+      customer_image: true,
+      customer_info: { select: { allergy: true } },
+    },
+  },
+  opd: { select: { status_opd: true } },
+} satisfies Prisma.appointmentSelect;
 
 @Injectable()
 export class QueueRepository {
@@ -27,25 +61,19 @@ export class QueueRepository {
         branch_id: branchId,
         date_appointment: date,
       },
-      include: {
-        customer: {
-          include: {
-            customer_info: true,
-          },
-        },
-        opd: true,
-      },
+      select: QUEUE_APPOINTMENT_SELECT,
       orderBy: { start_time: "asc" },
-    });
+    }) as Promise<AppointmentForQueue[]>;
   }
 
   async findAppointment(
     clinicId: string,
     branchId: string,
     appointmentId: string,
-  ): Promise<appointment | null> {
+  ): Promise<AppointmentRecord | null> {
     const found = await this.prisma.appointment.findUnique({
       where: { appointment_id: appointmentId },
+      select: APPOINTMENT_RECORD_SELECT,
     });
     if (!found || found.clinic_id !== clinicId || found.branch_id !== branchId) {
       return null;
@@ -57,10 +85,11 @@ export class QueueRepository {
     appointmentId: string,
     status: statusAppointment,
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
-  ): Promise<appointment> {
+  ): Promise<AppointmentRecord> {
     return tx.appointment.update({
       where: { appointment_id: appointmentId },
       data: { status_appointment: status, updated_at: new Date() },
+      select: APPOINTMENT_RECORD_SELECT,
     });
   }
 

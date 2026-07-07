@@ -520,7 +520,9 @@ model customer {
   customer_attendant        customer_attendant[]
   customer_coures           customer_coures[]
   customer_course_usage_log customer_course_usage_log[]
+  customer_file             customer_file[]
   customer_info             customer_info?
+  customer_note             customer_note[]
   customer_wallet           customer_wallet[]
   documents_signed_customer documents_signed_customer[]
   history_customer_group    history_customer_group[]
@@ -569,6 +571,52 @@ model customer_info {
   customer                   customer @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
 
   @@id([customer_id, clinic_id])
+}
+
+model customer_note {
+  note_id         String        @id @db.VarChar(50)
+  clinic_id       String        @db.VarChar(50)
+  branch_id       String        @db.VarChar(50)
+  customer_id     String        @db.VarChar(50)
+  content         String
+  status          record_status @default(ACTIVE)
+  created_by      String        @db.VarChar(50)
+  updated_by      String?       @db.VarChar(50)
+  created_at      DateTime      @db.Timestamp(6)
+  updated_at      DateTime      @db.Timestamp(6)
+  customer        customer      @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  created_by_user user          @relation("customer_note_created_by", fields: [created_by], references: [user_id])
+  updated_by_user user?         @relation("customer_note_updated_by", fields: [updated_by], references: [user_id])
+
+  @@index([customer_id, clinic_id])
+  @@index([clinic_id, branch_id])
+  @@index([created_at])
+}
+
+model customer_file {
+  file_id          String        @id @db.VarChar(50)
+  clinic_id        String        @db.VarChar(50)
+  branch_id        String        @db.VarChar(50)
+  customer_id      String        @db.VarChar(50)
+  display_name     String        @db.VarChar(255)
+  original_name    String        @db.VarChar(255)
+  mime_type        String        @db.VarChar(100)
+  file_size        Int
+  storage_provider String        @db.VarChar(30)
+  bucket_name      String        @db.VarChar(100)
+  object_key       String
+  public_url       String?
+  status           record_status @default(ACTIVE)
+  uploaded_by      String        @db.VarChar(50)
+  created_at       DateTime      @db.Timestamp(6)
+  updated_at       DateTime      @db.Timestamp(6)
+  customer         customer      @relation(fields: [customer_id, clinic_id], references: [customer_id, clinic_id])
+  uploaded_by_user user          @relation("customer_file_uploaded_by", fields: [uploaded_by], references: [user_id])
+
+  @@index([customer_id, clinic_id])
+  @@index([clinic_id, branch_id])
+  @@index([created_at])
+  @@index([object_key])
 }
 
 model default_permission {
@@ -1593,6 +1641,9 @@ model user {
   course_operator_user                    course_operator_user[]
   customer                                customer[]
   customer_attendant                      customer_attendant[]
+  customer_file_uploaded                  customer_file[]                @relation("customer_file_uploaded_by")
+  customer_note_created                   customer_note[]                @relation("customer_note_created_by")
+  customer_note_updated                   customer_note[]                @relation("customer_note_updated_by")
   cashier_detail                          customer_wallet[]              @relation("cashier_detail")
   create_customer_wallet                  customer_wallet[]              @relation("created_by_user")
   customer_wallet                         customer_wallet[]              @relation("seller_detail_user")
@@ -2091,11 +2142,11 @@ model appointment_consultation {
   clinic_id           String   @db.VarChar(50)
   branch_id           String   @db.VarChar(50)
   appointment_id      String   @unique @db.VarChar(50) // string ref — NO @relation
-  consultant_ref      String?  @db.VarChar(100)        // user_id OR free label ("เซลล์ประจำ")
+  consultant_ref      String?  @db.VarChar(100) // user_id OR free label ("เซลล์ประจำ")
   budget              Decimal? @db.Decimal(10, 2)
   promotion           String?  @db.VarChar(200)
-  outcome             String   @db.VarChar(30)         // interested | deciding | closed
-  services_interested Json?                            // string[] of chosen service labels
+  outcome             String   @db.VarChar(30) // interested | deciding | closed
+  services_interested Json? // string[] of chosen service labels
   notes               String?
   created_by          String?  @db.VarChar(50)
   updated_at          DateTime @db.Timestamp(6)
@@ -2109,14 +2160,14 @@ model appointment_anesthetic {
   clinic_id        String   @db.VarChar(50)
   branch_id        String   @db.VarChar(50)
   appointment_id   String   @unique @db.VarChar(50) // string ref — NO @relation
-  allergy_status   String   @db.VarChar(20)         // none | has | unchecked
+  allergy_status   String   @db.VarChar(20) // none | has | unchecked
   allergy_notes    String?  @db.VarChar(500)
-  nurse_ref        String   @db.VarChar(100)        // display label for now, user_id once staff catalog is live
+  nurse_ref        String   @db.VarChar(100) // display label for now, user_id once staff catalog is live
   room             String?  @db.VarChar(50)
   bed              String?  @db.VarChar(50)
   duration_minutes Int
   notes            String?
-  started_at       DateTime @db.Timestamp(6)        // server-set; every save restarts the anaesthetic clock
+  started_at       DateTime @db.Timestamp(6) // server-set; every save restarts the anaesthetic clock
   created_by       String?  @db.VarChar(50)
   updated_at       DateTime @db.Timestamp(6)
   created_at       DateTime @default(now()) @db.Timestamp(6)
