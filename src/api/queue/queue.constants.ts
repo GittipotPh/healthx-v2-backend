@@ -22,3 +22,11 @@ export const STEP_TO_APPOINTMENT_STATUS: Record<string, statusAppointment> = {
   COMPLETED: statusAppointment.SUCCESS,
   CANCELLED: statusAppointment.CANCEL,
 };
+
+/** `ref_queue_step_status.code` (e.g. "PENDING_PAYMENT") -> Kanban column id ("pending-payment"). */
+export function stepCodeToColumnId(code: string): string {
+  return code.toLowerCase().replace(/_/g, "-");
+}
+
+/** Kanban column ids: the seeded `ref_queue_step_status` catalog, lowercased/dashed. */
+export const QUEUE_STEP_COLUMNS = Object.keys(STEP_TO_APPOINTMENT_STATUS).map(stepCodeToColumnId);

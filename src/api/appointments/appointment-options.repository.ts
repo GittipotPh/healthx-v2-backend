@@ -2,15 +2,8 @@ import { Injectable } from "@nestjs/common";
 import { record_status, role_enum, type Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import { BranchAccessService } from "../../common/branch-access/branch-access.service";
-import {
-  CONSULT_TYPE_OPTIONS,
-  INTERNAL_TAG_OPTIONS,
-  MARKETING_CAMPAIGN_OPTIONS,
-  MARKETING_PLATFORM_OPTIONS,
-  NUMBING_DURATION_OPTIONS,
-  PREPARATION_TAG_OPTIONS,
-} from "./appointments.constants";
 import type {
+  AppointmentOption,
   AppointmentOptionPage,
   AppointmentOptionsView,
   BranchOption,
@@ -19,6 +12,22 @@ import type {
 } from "./appointments.mapper";
 import type { QueryAppointmentOptionsDto } from "./dto/query-appointment-options.dto";
 import type { RequestScope } from "../../auth/auth.types";
+
+const APPOINTMENT_OPTION_TYPES = [
+  "CONSULT_TYPE",
+  "MARKETING_PLATFORM",
+  "MARKETING_CAMPAIGN",
+  "PREPARATION_TAG",
+  "INTERNAL_TAG",
+  "NUMBING_DURATION",
+] as const;
+
+type AppointmentOptionType = (typeof APPOINTMENT_OPTION_TYPES)[number];
+type GroupedAppointmentOption = {
+  option: AppointmentOption;
+  rank: number;
+  sortOrder: number;
+};
 
 @Injectable()
 export class AppointmentOptionsRepository {
@@ -35,7 +44,7 @@ export class AppointmentOptionsRepository {
       return this.emptyOptions(branches);
     }
 
-    const [rooms] = await this.prisma.$transaction([
+    const [rooms, refOptions, procedures, doctors, assistants] = await Promise.all([
       this.prisma.examination_room.findMany({
         where: {
           branch_id: { in: branchIds },
@@ -44,7 +53,13 @@ export class AppointmentOptionsRepository {
         select: { room_id: true, room_name: true, branch_id: true },
         orderBy: [{ branch_id: "asc" }, { room_name: "asc" }],
       }),
+      this.refOptions(branchIds, scope),
+      this.procedureOptions({ branchId: scope.branchId, page: 1, pageSize: 100 }, scope),
+      this.doctorOptions({ branchId: scope.branchId, page: 1, pageSize: 100 }, scope),
+      this.assistantOptions({ branchId: scope.branchId, page: 1, pageSize: 100 }, scope),
     ]);
+
+    const grouped = this.groupRefOptions(refOptions);
 
     return {
       ...this.emptyOptions(branches),
@@ -53,9 +68,17 @@ export class AppointmentOptionsRepository {
         label: room.room_name,
         branchId: room.branch_id,
       })),
-      procedures: [],
-      doctors: [],
-      assistants: [],
+      procedures: procedures.items,
+      doctors: doctors.items,
+      assistants: assistants.items,
+      consultTypes: grouped.CONSULT_TYPE,
+      marketingPlatforms: grouped.MARKETING_PLATFORM,
+      marketingCampaigns: grouped.MARKETING_CAMPAIGN,
+      preparationTags: grouped.PREPARATION_TAG,
+      internalTags: grouped.INTERNAL_TAG,
+      numbingDurations: grouped.NUMBING_DURATION
+        .map((option) => this.numbingMinutes(option))
+        .filter((minutes): minutes is number => minutes !== null),
     };
   }
 
@@ -109,6 +132,7 @@ export class AppointmentOptionsRepository {
     query: QueryAppointmentOptionsDto,
     scope: RequestScope,
   ): Promise<AppointmentOptionPage<StaffOption>> {
+    console.log("docter",{scope})
     return this.findStaffByRole(query, scope, role_enum.DOCTOR);
   }
 
@@ -219,13 +243,80 @@ export class AppointmentOptionsRepository {
       procedures: [],
       doctors: [],
       assistants: [],
-      consultTypes: CONSULT_TYPE_OPTIONS,
-      marketingPlatforms: MARKETING_PLATFORM_OPTIONS,
-      marketingCampaigns: MARKETING_CAMPAIGN_OPTIONS,
-      preparationTags: PREPARATION_TAG_OPTIONS,
-      internalTags: INTERNAL_TAG_OPTIONS,
-      numbingDurations: NUMBING_DURATION_OPTIONS,
+      consultTypes: [],
+      marketingPlatforms: [],
+      marketingCampaigns: [],
+      preparationTags: [],
+      internalTags: [],
+      numbingDurations: [],
     };
+  }
+
+  private refOptions(branchIds: string[], scope: RequestScope) {
+    return this.prisma.ref_appointment_option.findMany({
+      where: {
+        is_active: true,
+        type: { in: [...APPOINTMENT_OPTION_TYPES] },
+        OR: [
+          { clinic_id: null, branch_id: null },
+          { clinic_id: scope.clinicId, branch_id: null },
+          { clinic_id: scope.clinicId, branch_id: { in: branchIds } },
+        ],
+      },
+      orderBy: [{ type: "asc" }, { sort_order: "asc" }, { label_th: "asc" }],
+    });
+  }
+
+  private groupRefOptions(
+    rows: Awaited<ReturnType<AppointmentOptionsRepository["refOptions"]>>,
+  ): Record<AppointmentOptionType, AppointmentOption[]> {
+    const grouped: Record<AppointmentOptionType, Map<string, GroupedAppointmentOption>> = {
+      CONSULT_TYPE: new Map(),
+      MARKETING_PLATFORM: new Map(),
+      MARKETING_CAMPAIGN: new Map(),
+      PREPARATION_TAG: new Map(),
+      INTERNAL_TAG: new Map(),
+      NUMBING_DURATION: new Map(),
+    };
+
+    for (const row of rows) {
+      if (!APPOINTMENT_OPTION_TYPES.includes(row.type as AppointmentOptionType)) continue;
+      const type = row.type as AppointmentOptionType;
+      const rank = this.optionScopeRank(row);
+      const existing = grouped[type].get(row.code);
+      if (existing && existing.rank >= rank) continue;
+      grouped[type].set(row.code, {
+        option: { id: row.code, label: row.label_th },
+        rank,
+        sortOrder: row.sort_order,
+      });
+    }
+
+    return {
+      CONSULT_TYPE: this.toAppointmentOptions(grouped.CONSULT_TYPE),
+      MARKETING_PLATFORM: this.toAppointmentOptions(grouped.MARKETING_PLATFORM),
+      MARKETING_CAMPAIGN: this.toAppointmentOptions(grouped.MARKETING_CAMPAIGN),
+      PREPARATION_TAG: this.toAppointmentOptions(grouped.PREPARATION_TAG),
+      INTERNAL_TAG: this.toAppointmentOptions(grouped.INTERNAL_TAG),
+      NUMBING_DURATION: this.toAppointmentOptions(grouped.NUMBING_DURATION),
+    };
+  }
+
+  private toAppointmentOptions(options: Map<string, GroupedAppointmentOption>): AppointmentOption[] {
+    return Array.from(options.values())
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.option.label.localeCompare(right.option.label))
+      .map(({ option }) => option);
+  }
+
+  private optionScopeRank(row: { clinic_id: string | null; branch_id: string | null }): number {
+    if (row.branch_id) return 3;
+    if (row.clinic_id) return 2;
+    return 1;
+  }
+
+  private numbingMinutes(option: AppointmentOption): number | null {
+    const parsed = Number(option.id);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   }
 
   private userLabel(user: {

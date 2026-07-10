@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { auditReferenceType, role_enum, statusAppointment } from "@prisma/client";
 import { QueueService } from "./queue.service";
 import type { QueueRepository } from "./queue.repository";
@@ -9,6 +9,8 @@ import type { Principal, RequestScope } from "../../auth/auth.types";
 import type { TransitionQueueDto } from "./dto/transition-queue.dto";
 import type { SaveConsultationDto } from "./dto/save-consultation.dto";
 import type { SaveAnestheticDto } from "./dto/save-anesthetic.dto";
+import type { SaveQueueConfigDto } from "./dto/save-queue-config.dto";
+import { DEFAULT_QUEUE_CONFIG } from "./queue-config.defaults";
 
 const SCOPE: RequestScope = {
   userId: "user-1",
@@ -25,7 +27,26 @@ const AUDIT_VIEW = { id: 1, action: "move" } as unknown as AuditLogView;
 // Sentinel standing in for the Prisma.TransactionClient handed to the callback.
 const TX = { __tx: true };
 
-function makeService(options: { appointment?: object | null } = {}) {
+/** A persisted queue_config row as the repository would return it. */
+function makeQueueConfigRow(): Record<string, unknown> {
+  return {
+    queue_config_id: "cfg-1",
+    clinic_id: SCOPE.clinicId,
+    branch_id: SCOPE.branchId,
+    columns: DEFAULT_QUEUE_CONFIG.columns,
+    sla: DEFAULT_QUEUE_CONFIG.sla,
+    transitions: DEFAULT_QUEUE_CONFIG.transitions,
+    automation: DEFAULT_QUEUE_CONFIG.automation,
+    tracking: DEFAULT_QUEUE_CONFIG.tracking,
+    notifications: DEFAULT_QUEUE_CONFIG.notifications,
+    permissions: DEFAULT_QUEUE_CONFIG.permissions,
+    updated_by: "user-9",
+    updated_at: new Date("2026-07-10T00:00:00Z"),
+    created_at: new Date("2026-07-01T00:00:00Z"),
+  };
+}
+
+function makeService(options: { appointment?: object | null; queueConfig?: object | null } = {}) {
   const prisma = {
     $transaction: jest.fn(
       async (callback: (tx: typeof TX) => Promise<unknown>) => callback(TX),
@@ -40,6 +61,15 @@ function makeService(options: { appointment?: object | null } = {}) {
     upsertQueueStep: jest.fn().mockResolvedValue({}),
     upsertConsultation: jest.fn().mockResolvedValue({}),
     upsertAnesthetic: jest.fn().mockResolvedValue({}),
+    findQueueConfig: jest.fn().mockResolvedValue(options.queueConfig ?? null),
+    upsertQueueConfig: jest.fn().mockResolvedValue(makeQueueConfigRow()),
+    findQueueStatus: jest.fn().mockResolvedValue(null),
+    countActiveCardsInStep: jest.fn().mockResolvedValue(0),
+    hasAssignedDoctor: jest.fn().mockResolvedValue(true),
+    hasAnesthetic: jest.fn().mockResolvedValue(true),
+    hasUnpaidPrescriptions: jest.fn().mockResolvedValue(false),
+    hasPrescriptions: jest.fn().mockResolvedValue(true),
+    hasUsedCourse: jest.fn().mockResolvedValue(true),
   } as unknown as QueueRepository;
 
   const auditLogService = {
@@ -155,6 +185,66 @@ describe("QueueService.transition", () => {
       TX,
     );
   });
+
+  it("rejects transitions to disabled columns", async () => {
+    const configRow = makeQueueConfigRow();
+    (configRow.columns as any)[2].enabled = false; // consulting is index 2
+
+    const { service } = makeService({ queueConfig: configRow });
+
+    await expect(
+      service.transition(dto({ step: "CONSULTING" }), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it("rejects transitions for unauthorized user roles", async () => {
+    const configRow = makeQueueConfigRow();
+    // arrived only allows ADMIN
+    (configRow.permissions as any).arrived = ["ADMIN"];
+
+    const { service } = makeService({ queueConfig: configRow });
+
+    await expect(
+      service.transition(dto({ step: "ARRIVED" }), SCOPE, PRINCIPAL), // SCOPE has role NURSE
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it("rejects transitions that skip required non-skippable columns", async () => {
+    const configRow = makeQueueConfigRow();
+    // set arrived as required and non-skippable
+    (configRow.columns as any)[1].isRequired = true; // arrived is index 1
+    (configRow.columns as any)[1].canSkip = false;
+
+    // mock current status as confirmed (index 0)
+    const mockRepo = {
+      findAppointment: jest.fn().mockResolvedValue({ appointment_id: "appt-1" }),
+      findQueueConfig: jest.fn().mockResolvedValue(configRow),
+      findQueueStatus: jest.fn().mockResolvedValue({ current_step: "CONFIRMED" }),
+    };
+    const customService = new QueueService(null as any, mockRepo as any, null as any);
+
+    await expect(
+      customService.transition(dto({ step: "CONSULTING" }), SCOPE, PRINCIPAL), // skips arrived
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it("rejects transitions when prerequisites are not met", async () => {
+    const configRow = makeQueueConfigRow();
+    // completed requires OPD
+    (configRow.transitions as any).completed.requiresOPD = true;
+
+    // mock appointment with no opd_id
+    const mockRepo = {
+      findAppointment: jest.fn().mockResolvedValue({ appointment_id: "appt-1", opd_id: null }),
+      findQueueConfig: jest.fn().mockResolvedValue(configRow),
+      findQueueStatus: jest.fn().mockResolvedValue({ current_step: "VERIFIED" }),
+    };
+    const customService = new QueueService(null as any, mockRepo as any, null as any);
+
+    await expect(
+      customService.transition(dto({ step: "COMPLETED" }), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(BadRequestException);
+  });
 });
 
 function anestheticDto(overrides: Partial<SaveAnestheticDto> = {}): SaveAnestheticDto {
@@ -257,6 +347,127 @@ describe("QueueService.saveAnesthetic", () => {
       TX,
     );
     expect(result).toEqual({ appointmentId: "appt-1", audit: AUDIT_VIEW });
+  });
+});
+
+/** A valid full-replace config payload (deep-cloned defaults + overrides). */
+function configDto(mutate?: (dto: SaveQueueConfigDto) => void): SaveQueueConfigDto {
+  const dto = JSON.parse(JSON.stringify(DEFAULT_QUEUE_CONFIG)) as SaveQueueConfigDto;
+  mutate?.(dto);
+  return dto;
+}
+
+const ADMIN_SCOPE: RequestScope = { ...SCOPE, roles: [role_enum.ADMIN] };
+const ROOT_SCOPE: RequestScope = { ...SCOPE, isClinicRootUser: true, roles: [] };
+
+describe("QueueService.getQueueConfig", () => {
+  it("returns built-in defaults without writing when no row exists", async () => {
+    const { service, repository, prisma } = makeService({ queueConfig: null });
+
+    const view = await service.getQueueConfig(SCOPE);
+
+    expect(view.queueConfigId).toBeNull();
+    expect(view.clinicId).toBe(SCOPE.clinicId);
+    expect(view.branchId).toBe(SCOPE.branchId);
+    expect(view.columns).toEqual(DEFAULT_QUEUE_CONFIG.columns);
+    expect(view.updatedAt).toBeNull();
+    // GET must never create the row — that's the save's job.
+    expect(repository.upsertQueueConfig).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("maps a persisted row to the camelCase view", async () => {
+    const { service, repository } = makeService({ queueConfig: makeQueueConfigRow() });
+
+    const view = await service.getQueueConfig(SCOPE);
+
+    expect(repository.findQueueConfig).toHaveBeenCalledWith(SCOPE.clinicId, SCOPE.branchId);
+    expect(view.queueConfigId).toBe("cfg-1");
+    expect(view.updatedBy).toBe("user-9");
+    expect(view.updatedAt).toBe("2026-07-10T00:00:00.000Z");
+    expect(view.createdAt).toBe("2026-07-01T00:00:00.000Z");
+  });
+});
+
+describe("QueueService.updateQueueConfig", () => {
+  it("rejects callers who are neither clinic root nor ADMIN before touching the database", async () => {
+    const { service, repository, prisma } = makeService();
+
+    await expect(service.updateQueueConfig(configDto(), SCOPE, PRINCIPAL)).rejects.toThrow(
+      ForbiddenException,
+    );
+    expect(repository.upsertQueueConfig).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("saves upsert + audit inside one $transaction for an ADMIN", async () => {
+    const { service, prisma, repository, auditLogService } = makeService();
+
+    const view = await service.updateQueueConfig(configDto(), ADMIN_SCOPE, PRINCIPAL);
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(repository.upsertQueueConfig).toHaveBeenCalledWith(
+      ADMIN_SCOPE.clinicId,
+      ADMIN_SCOPE.branchId,
+      expect.objectContaining({ automation: expect.objectContaining({ defaultColumn: "arrived" }) }),
+      ADMIN_SCOPE.userId,
+      TX,
+    );
+    expect(auditLogService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clinicId: ADMIN_SCOPE.clinicId,
+        branchId: ADMIN_SCOPE.branchId,
+        referenceType: auditReferenceType.QUEUE,
+        referenceId: ADMIN_SCOPE.branchId,
+        action: "update-queue-config",
+        actorUserId: ADMIN_SCOPE.userId,
+        actorName: PRINCIPAL.name,
+        actorRole: role_enum.ADMIN,
+      }),
+      TX,
+    );
+    expect(view.queueConfigId).toBe("cfg-1");
+  });
+
+  it("allows a clinic root user with no branch role", async () => {
+    const { service, auditLogService } = makeService();
+
+    await service.updateQueueConfig(configDto(), ROOT_SCOPE, PRINCIPAL);
+
+    expect(auditLogService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ actorRole: "CLINIC_ROOT" }),
+      TX,
+    );
+  });
+
+  it.each<[string, (dto: SaveQueueConfigDto) => void]>([
+    ["duplicate column ids", (dto) => { dto.columns[1].id = dto.columns[0].id; }],
+    ["sla referencing an unknown column", (dto) => { dto.sla[0].columnId = "cancelled"; }],
+    ["duplicate sla entries", (dto) => { dto.sla[1].columnId = dto.sla[0].columnId; }],
+    ["warning above critical", (dto) => { dto.sla[1].warningMinutes = 99; dto.sla[1].criticalMinutes = 15; }],
+    ["defaultColumn pointing at a disabled column", (dto) => { dto.columns[1].enabled = false; }],
+    ["permissions keyed by an unknown column", (dto) => { dto.permissions["not-a-column"] = ["ADMIN"]; }],
+    ["permissions containing an unknown role", (dto) => { dto.permissions.arrived = ["SUPERUSER"]; }],
+  ])("rejects %s before touching the database", async (_label, mutate) => {
+    const { service, repository, prisma } = makeService();
+
+    await expect(
+      service.updateQueueConfig(configDto(mutate), ADMIN_SCOPE, PRINCIPAL),
+    ).rejects.toThrow(BadRequestException);
+    expect(repository.upsertQueueConfig).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects saving config if a disabled column contains active cards", async () => {
+    const configPayload = configDto();
+    configPayload.columns[1].enabled = false; // arrived is index 1
+
+    const { service, repository } = makeService();
+    jest.spyOn(repository, "countActiveCardsInStep").mockResolvedValue(5); // 5 cards active
+
+    await expect(
+      service.updateQueueConfig(configPayload, ADMIN_SCOPE, PRINCIPAL),
+    ).rejects.toThrow(BadRequestException);
   });
 });
 

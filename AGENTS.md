@@ -238,6 +238,21 @@ Services should:
 - Avoid direct Prisma usage if a repository layer exists.
 - Avoid returning raw Prisma objects if API DTO shape differs.
 
+**Service-layer rules added 2026-07-07 (customer-module review):**
+
+- **Never default-empty a failed repository read** (`.catch(() => [])`). A broken table
+  then renders as "customer has no notes" with zero signal. Let the error propagate to
+  the global exception filter; if a read is genuinely optional, log the failure before
+  substituting a fallback.
+- **The DB row is the source of truth for stored files.** Delete order: soft-delete the
+  metadata row first, then best-effort blob delete with a *logged* catch — never leave an
+  ACTIVE row pointing at a missing blob. Upload order: blob first, then the row, with a
+  compensating blob delete if the insert fails (see `CustomersService.uploadFile`/`deleteFile`).
+- **Legacy wall-clock date/time strings are Bangkok time.** When constructing a `Date`
+  from `date_appointment` + `start_time` style columns, anchor to `+07:00` explicitly
+  (see `CLINIC_UTC_OFFSET` in `customer-profile.mapper.ts`) — the server runs in UTC, so
+  server-local parsing misclassifies "upcoming" by up to 7 hours.
+
 ## Repository Rules
 
 Repositories should:
@@ -256,6 +271,21 @@ compute outstanding/deposit on a card — response time grows with clinic histor
 Instead: compute aggregates in SQL (`groupBy`/`aggregate` over the page's ids, same
 `$transaction`) or cap the relation with `take:` + a minimal `select`. Rule of thumb:
 the row count a list endpoint touches must be O(pageSize), not O(clinic history).
+
+**Sub-resource endpoints get narrow slice queries, not a shared mega-include (added
+2026-07-07).** When a record exposes several sub-resource GETs
+(`:id/appointments`, `:id/financials`, `:id/documents`, …), each endpoint must query
+only the relations its mapper actually maps — never reuse one "profile" query that
+includes everything. The customers module is the template:
+`findAppointmentSlice`/`findFinancialSlice`/`findDocumentSlice`/`findTimelineSlice` in
+`customers.repository.ts` replaced four `requireProfile` calls that each ran the full
+profile include. The 404 check stays cheap (`existsInClinic` or a narrow `findUnique`);
+only the aggregate `profile` endpoint may run the full include.
+
+**Every write's `where` clause carries the tenant scope (added 2026-07-07).** Even when
+a service pre-checks ownership, the mutation itself must be scope-filtered
+(`updateMany({ where: { id, clinic_id, branch_id } })`, as in `markFileDeleted`) — a
+bare-PK `update` is a TOCTOU footgun waiting for the next unguarded caller.
 
 **Options/lookup endpoint conventions (2026-07-07, from the filter-options review):**
 

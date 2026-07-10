@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { ApiProperty } from "@nestjs/swagger";
 import { CustomersRepository } from "./customers.repository";
 import { CustomerOptionsView, CustomerView, toCustomerView } from "./customers.mapper";
@@ -43,6 +43,8 @@ export class CustomerListResult {
 
 @Injectable()
 export class CustomersService {
+  private readonly logger = new Logger(CustomersService.name);
+
   constructor(
     private readonly repository: CustomersRepository,
     private readonly storageService: StorageService,
@@ -75,25 +77,34 @@ export class CustomersService {
   }
 
   async timeline(customerId: string, scope: RequestScope): Promise<CustomerTimelineItem[]> {
-    return toTimelineItems(await this.requireProfile(customerId, scope));
+    const row = requireRow(await this.repository.findTimelineSlice(customerId, scope));
+    const [notes, files] = await Promise.all([
+      this.repository.findNotes(customerId, scope),
+      this.repository.findFiles(customerId, scope),
+    ]);
+    return toTimelineItems({ ...row, customer_note: notes, customer_file: files });
   }
 
   async appointments(
     customerId: string,
     scope: RequestScope,
   ): Promise<CustomerAppointmentSummary[]> {
-    return toAppointmentSummaries(await this.requireProfile(customerId, scope));
+    const row = requireRow(await this.repository.findAppointmentSlice(customerId, scope));
+    return toAppointmentSummaries(row);
   }
 
   async financials(customerId: string, scope: RequestScope): Promise<CustomerFinancialsView> {
-    return toFinancialsView(await this.requireProfile(customerId, scope));
+    const row = requireRow(await this.repository.findFinancialSlice(customerId, scope));
+    return toFinancialsView(row);
   }
 
   async documents(
     customerId: string,
     scope: RequestScope,
   ): Promise<CustomerDocumentSummary[]> {
-    const row = await this.requireProfile(customerId, scope);
+    const slice = requireRow(await this.repository.findDocumentSlice(customerId, scope));
+    const files = await this.repository.findFiles(customerId, scope);
+    const row = { ...slice, customer_file: files };
     const documents = toDocumentSummaries(row);
     const readUrls = new Map<string, string | null>();
 
@@ -118,7 +129,7 @@ export class CustomersService {
 
   async notes(customerId: string, scope: RequestScope): Promise<CustomerNoteView[]> {
     await this.ensureCustomer(customerId, scope);
-    const rows = await this.repository.findNotes(customerId, scope).catch(() => []);
+    const rows = await this.repository.findNotes(customerId, scope);
     return rows.map(toCustomerNoteView);
   }
 
@@ -162,19 +173,35 @@ export class CustomersService {
       fileSize: file.size,
     });
 
-    const created = await this.repository.createFile({
-      fileId,
-      customerId,
-      displayName: dto.displayName || originalName,
-      originalName,
-      mimeType: file.mimetype,
-      fileSize: file.size,
-      storageProvider: stored.provider,
-      bucketName: stored.bucketName,
-      objectKey: stored.objectKey,
-      publicUrl: stored.publicUrl,
-      scope,
-    });
+    let created;
+    try {
+      created = await this.repository.createFile({
+        fileId,
+        customerId,
+        displayName: dto.displayName || originalName,
+        originalName,
+        mimeType: file.mimetype,
+        fileSize: file.size,
+        storageProvider: stored.provider,
+        bucketName: stored.bucketName,
+        objectKey: stored.objectKey,
+        publicUrl: stored.publicUrl,
+        scope,
+      });
+    } catch (error) {
+      // The DB row is the source of truth — remove the just-uploaded blob so a
+      // failed insert doesn't leave an orphaned object in storage.
+      await this.storageService
+        .deleteObject({ bucketName: stored.bucketName, objectKey: stored.objectKey })
+        .catch((cleanupError: unknown) =>
+          this.logger.error({
+            msg: "customer file upload compensation failed; orphaned blob left in storage",
+            objectKey: stored.objectKey,
+            err: cleanupError,
+          }),
+        );
+      throw error;
+    }
 
     const readUrl = await this.storageService.getReadUrl({
       bucketName: created.bucket_name,
@@ -190,11 +217,22 @@ export class CustomersService {
       throw new NotFoundException("Customer file not found");
     }
 
-    await this.storageService.deleteObject({
-      bucketName: file.bucket_name,
-      objectKey: file.object_key,
-    });
+    // Soft-delete the row first: the DB is the source of truth, so a storage
+    // failure must never leave an ACTIVE row pointing at a missing blob.
     await this.repository.markFileDeleted(fileId, scope);
+    try {
+      await this.storageService.deleteObject({
+        bucketName: file.bucket_name,
+        objectKey: file.object_key,
+      });
+    } catch (error) {
+      this.logger.error({
+        msg: "customer file blob delete failed after soft-delete; orphaned blob left in storage",
+        fileId,
+        objectKey: file.object_key,
+        err: error,
+      });
+    }
     return toCustomerFileView(file, null);
   }
 
@@ -207,8 +245,8 @@ export class CustomersService {
       throw new NotFoundException("Customer not found");
     }
     const [notes, files] = await Promise.all([
-      this.repository.findNotes(customerId, scope).catch(() => []),
-      this.repository.findFiles(customerId, scope).catch(() => []),
+      this.repository.findNotes(customerId, scope),
+      this.repository.findFiles(customerId, scope),
     ]);
 
     return {
@@ -233,6 +271,13 @@ export class CustomersService {
       throw new BadRequestException("File is too large");
     }
   }
+}
+
+function requireRow<T>(row: T | null): T {
+  if (!row) {
+    throw new NotFoundException("Customer not found");
+  }
+  return row;
 }
 
 const ALLOWED_CUSTOMER_FILE_MIME_TYPES = new Set([

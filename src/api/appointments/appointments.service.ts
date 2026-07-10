@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { ApiProperty } from "@nestjs/swagger";
 import { auditReferenceType } from "@prisma/client";
 import { AppointmentOptionsRepository } from "./appointment-options.repository";
@@ -16,6 +16,7 @@ import { RescheduleAppointmentDto } from "./dto/reschedule-appointment.dto";
 import type { QueryAppointmentOptionsDto } from "./dto/query-appointment-options.dto";
 import type { QueryAppointmentsDto } from "./dto/query-appointments.dto";
 import type { RequestScope } from "../../auth/auth.types";
+import { BranchAccessService } from "../../common/branch-access/branch-access.service";
 import { CustomersService } from "../customers/customers.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
 
@@ -40,6 +41,7 @@ export class AppointmentsService {
     private readonly optionsRepository: AppointmentOptionsRepository,
     private readonly customersService: CustomersService,
     private readonly auditLogService: AuditLogService,
+    private readonly branchAccessService: BranchAccessService,
   ) {}
 
   async list(query: QueryAppointmentsDto, scope: RequestScope): Promise<AppointmentListResult> {
@@ -53,23 +55,25 @@ export class AppointmentsService {
   }
 
   async create(dto: CreateAppointmentDto, scope: RequestScope): Promise<AppointmentView> {
-    // Throws NotFoundException if the customer doesn't exist in this clinic.
-    await this.customersService.detail(dto.customerId, scope.clinicId);
+    const targetScope = await this.resolveTargetScope(dto, scope);
 
-    if (dto.opdId && !(await this.repository.opdExistsInScope(dto.opdId, scope))) {
+    // Throws NotFoundException if the customer doesn't exist in this clinic.
+    await this.customersService.detail(dto.customerId, targetScope.clinicId);
+
+    if (dto.opdId && !(await this.repository.opdExistsInScope(dto.opdId, targetScope))) {
       throw new NotFoundException("OPD record not found for this clinic/branch");
     }
 
-    const created = await this.repository.create(dto, scope);
+    const created = await this.repository.create(dto, targetScope);
 
     await this.auditLogService.record({
-      clinicId: scope.clinicId,
-      branchId: scope.branchId,
+      clinicId: targetScope.clinicId,
+      branchId: targetScope.branchId,
       referenceType: auditReferenceType.APPOINTMENT,
       referenceId: created.appointment_id,
       action: "create",
       actionLabel: "สร้างนัดหมาย",
-      actorUserId: scope.userId,
+      actorUserId: targetScope.userId,
     });
 
     return toAppointmentView(created);
@@ -179,5 +183,26 @@ export class AppointmentsService {
     const newH = Math.floor(total / 60) % 24;
     const newM = total % 60;
     return `${String(newH).padStart(2, "0")}:${String(newM).padStart(2, "0")}`;
+  }
+
+  private async resolveTargetScope(
+    dto: CreateAppointmentDto,
+    scope: RequestScope,
+  ): Promise<RequestScope> {
+    const requestedBranchId = dto.branchId || scope.branchId;
+
+    if (requestedBranchId === scope.branchId) {
+      return scope;
+    }
+
+    const branches = await this.branchAccessService.findAccessibleBranches(scope);
+    if (!branches.some((branch) => branch.branchId === requestedBranchId)) {
+      throw new BadRequestException("Selected branch is not available for this user");
+    }
+
+    return {
+      ...scope,
+      branchId: requestedBranchId,
+    };
   }
 }

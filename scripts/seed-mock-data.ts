@@ -33,6 +33,32 @@ const prisma = new PrismaClient({
 const ONE_PIXEL_PNG =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn6zkAAAAAASUVORK5CYII=";
 
+const APPOINTMENT_REFERENCE_OPTIONS = [
+  { type: "CONSULT_TYPE", code: "consult", label: "Consult", sort: 10 },
+  { type: "CONSULT_TYPE", code: "procedure", label: "Procedure", sort: 20 },
+  { type: "CONSULT_TYPE", code: "follow-up", label: "Follow-up", sort: 30 },
+  { type: "MARKETING_PLATFORM", code: "facebook", label: "Facebook", sort: 10 },
+  { type: "MARKETING_PLATFORM", code: "line", label: "LINE", sort: 20 },
+  { type: "MARKETING_PLATFORM", code: "google-ads", label: "Google Ads", sort: 30 },
+  { type: "MARKETING_PLATFORM", code: "walk-in", label: "Walk-in", sort: 40 },
+  { type: "MARKETING_PLATFORM", code: "instagram", label: "Instagram", sort: 50 },
+  { type: "MARKETING_CAMPAIGN", code: "birthday-promotion", label: "Birthday Promotion", sort: 10 },
+  { type: "MARKETING_CAMPAIGN", code: "member-special", label: "Member Special", sort: 20 },
+  { type: "MARKETING_CAMPAIGN", code: "flash-sale", label: "Flash Sale", sort: 30 },
+  { type: "MARKETING_CAMPAIGN", code: "new-year-campaign", label: "New Year Campaign", sort: 40 },
+  { type: "PREPARATION_TAG", code: "no-vitamins", label: "No vitamins", sort: 10 },
+  { type: "PREPARATION_TAG", code: "no-alcohol", label: "No alcohol", sort: 20 },
+  { type: "PREPARATION_TAG", code: "fasting", label: "Fasting", sort: 30 },
+  { type: "PREPARATION_TAG", code: "wash-face", label: "Wash face", sort: 40 },
+  { type: "PREPARATION_TAG", code: "numbing-cream", label: "Numbing cream", sort: 50 },
+  { type: "INTERNAL_TAG", code: "laser-zone", label: "Laser zone", sort: 10 },
+  { type: "INTERNAL_TAG", code: "vip", label: "VIP patient", sort: 20 },
+  { type: "INTERNAL_TAG", code: "special-care", label: "Special care", sort: 30 },
+  { type: "NUMBING_DURATION", code: "30", label: "30 minutes", sort: 10, metadata: { minutes: 30 } },
+  { type: "NUMBING_DURATION", code: "45", label: "45 minutes", sort: 20, metadata: { minutes: 45 } },
+  { type: "NUMBING_DURATION", code: "60", label: "60 minutes", sort: 30, metadata: { minutes: 60 } },
+] as const;
+
 interface MockCourseBalance {
   itemKey: "BOTOX" | "FILLER";
   used: number;
@@ -70,6 +96,39 @@ function ymd(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+function appointmentOptionId(type: string, code: string): string {
+  return `GLOBAL-${type}-${code.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`.slice(0, 80);
+}
+
+async function seedAppointmentReferenceOptions(now: Date): Promise<void> {
+  for (const option of APPOINTMENT_REFERENCE_OPTIONS) {
+    await prisma.ref_appointment_option.upsert({
+      where: { option_id: appointmentOptionId(option.type, option.code) },
+      update: {
+        code: option.code,
+        label_th: option.label,
+        label_en: option.label,
+        sort_order: option.sort,
+        is_active: true,
+        metadata: "metadata" in option ? option.metadata : undefined,
+        updated_at: now,
+      },
+      create: {
+        option_id: appointmentOptionId(option.type, option.code),
+        type: option.type,
+        code: option.code,
+        label_th: option.label,
+        label_en: option.label,
+        sort_order: option.sort,
+        is_active: true,
+        metadata: "metadata" in option ? option.metadata : undefined,
+        created_at: now,
+        updated_at: now,
+      },
+    });
+  }
+}
+
 async function seedClinicAndBranch(
   clinicId: string,
   branchId: string,
@@ -95,6 +154,35 @@ async function seedClinicAndBranch(
         branch_id: branchId,
         room_name: roomName,
         room_status: record_status.ACTIVE,
+      },
+    });
+  }
+
+  const operationItems = [
+    { code: "CONSULT", title: "Consultation", minutes: "30" },
+    { code: "BOTOX", title: "Botox", minutes: "45" },
+    { code: "FILLER", title: "Filler", minutes: "60" },
+    { code: "HIFU", title: "HIFU", minutes: "90" },
+    { code: "LASER", title: "Laser", minutes: "45" },
+    { code: "SKINBOOSTER", title: "Skinbooster", minutes: "60" },
+  ];
+
+  for (const item of operationItems) {
+    await prisma.operation_item.upsert({
+      where: { op_id: `OP-${prefix}-${item.code}` },
+      update: {
+        title: item.title,
+        operating_time: item.minutes,
+        status: record_status.ACTIVE,
+      },
+      create: {
+        op_id: `OP-${prefix}-${item.code}`,
+        branch_id: branchId,
+        title: item.title,
+        operating_time: item.minutes,
+        user_create: adminUserId,
+        status: record_status.ACTIVE,
+        created_at: now,
       },
     });
   }
@@ -175,7 +263,7 @@ async function seedClinicAndBranch(
   });
   await prisma.customer.deleteMany({
     where: { customer_id: { in: mockCustomerIds } },
-  });
+  }).catch(() => {});
 
   // 4) Ensure customer-card master data exists
   for (const group of [
@@ -517,29 +605,35 @@ async function seedClinicAndBranch(
   ];
 
   for (const [index, c] of customerData.entries()) {
-    await prisma.customer.create({
-      data: {
+    const customerRecord = {
+      branch_id: branchId,
+      title: c.gender === "male" ? "นาย" : "นางสาว",
+      name: c.name,
+      lastname: c.lastname,
+      nickname: c.nickname,
+      gender: c.gender,
+      birth_date: c.birth_date,
+      personal_id: c.personal_id,
+      phone_number: c.phone_number,
+      line_id: c.line_id,
+      customer_status: true,
+      status_vip: c.status_vip,
+      customer_group: c.customer_group,
+      attendant: index % 2 === 0 ? doctorUserId : adminUserId,
+      point_accumulate_all_old: c.points_old,
+      point_current_year: c.points_current,
+      user_create: adminUserId,
+      updated_at: now,
+    };
+
+    await prisma.customer.upsert({
+      where: { customer_id_clinic_id: { customer_id: c.id, clinic_id: clinicId } },
+      update: customerRecord,
+      create: {
+        ...customerRecord,
         customer_id: c.id,
         clinic_id: clinicId,
-        branch_id: branchId,
-        title: c.gender === "male" ? "นาย" : "นางสาว",
-        name: c.name,
-        lastname: c.lastname,
-        nickname: c.nickname,
-        gender: c.gender,
-        birth_date: c.birth_date,
-        personal_id: c.personal_id,
-        phone_number: c.phone_number,
-        line_id: c.line_id,
-        customer_status: true,
-        status_vip: c.status_vip,
-        customer_group: c.customer_group,
-        attendant: index % 2 === 0 ? doctorUserId : adminUserId,
-        point_accumulate_all_old: c.points_old,
-        point_current_year: c.points_current,
-        user_create: adminUserId,
         created_at: addDays(now, -index * 7),
-        updated_at: now,
       },
     });
 
@@ -640,27 +734,33 @@ async function seedClinicAndBranch(
     }
 
     if (c.outstanding > 0) {
-      await prisma.sale_order.create({
-        data: {
-          sale_order_id: `SO-DUE-CARD-${prefix}-${String(index + 1).padStart(2, "0")}`,
+      const saleOrderId = `SO-DUE-CARD-${prefix}-${String(index + 1).padStart(2, "0")}`;
+      const saleOrderRecord = {
+        clinic_id: clinicId,
+        customer_id: c.id,
+        total: c.outstanding,
+        promotion_discount: 0,
+        customer_discount: 0,
+        voucher_discount: 0,
+        extra_discount: 0,
+        subtotal: c.outstanding,
+        round_decimal: false,
+        totalDue: c.outstanding,
+        remark: "mock outstanding balance for customer card",
+        sale_order_status: sale_order_status.PENDING,
+        status: record_status.ACTIVE,
+        date: now,
+        created_by: adminUserId,
+        updated_at: now,
+      };
+      await prisma.sale_order.upsert({
+        where: { sale_order_id_branch_id: { sale_order_id: saleOrderId, branch_id: branchId } },
+        update: saleOrderRecord,
+        create: {
+          ...saleOrderRecord,
+          sale_order_id: saleOrderId,
           branch_id: branchId,
-          clinic_id: clinicId,
-          customer_id: c.id,
-          total: c.outstanding,
-          promotion_discount: 0,
-          customer_discount: 0,
-          voucher_discount: 0,
-          extra_discount: 0,
-          subtotal: c.outstanding,
-          round_decimal: false,
-          totalDue: c.outstanding,
-          remark: "mock outstanding balance for customer card",
-          sale_order_status: sale_order_status.PENDING,
-          status: record_status.ACTIVE,
-          date: now,
-          created_by: adminUserId,
           created_at: now,
-          updated_at: now,
         },
       });
     }
@@ -671,27 +771,32 @@ async function seedClinicAndBranch(
         return sum + (course.itemKey === "BOTOX" ? 12000 : 15000);
       }, 0);
 
-      await prisma.sale_order.create({
-        data: {
+      const saleOrderRecord = {
+        clinic_id: clinicId,
+        customer_id: c.id,
+        total: subtotal,
+        promotion_discount: 0,
+        customer_discount: 0,
+        voucher_discount: 0,
+        extra_discount: 0,
+        subtotal,
+        round_decimal: false,
+        totalDue: 0,
+        remark: "mock course purchase for customer card",
+        sale_order_status: sale_order_status.PAID,
+        status: record_status.ACTIVE,
+        date: now,
+        created_by: adminUserId,
+        updated_at: now,
+      };
+      await prisma.sale_order.upsert({
+        where: { sale_order_id_branch_id: { sale_order_id: saleOrderId, branch_id: branchId } },
+        update: saleOrderRecord,
+        create: {
+          ...saleOrderRecord,
           sale_order_id: saleOrderId,
           branch_id: branchId,
-          clinic_id: clinicId,
-          customer_id: c.id,
-          total: subtotal,
-          promotion_discount: 0,
-          customer_discount: 0,
-          voucher_discount: 0,
-          extra_discount: 0,
-          subtotal,
-          round_decimal: false,
-          totalDue: 0,
-          remark: "mock course purchase for customer card",
-          sale_order_status: sale_order_status.PAID,
-          status: record_status.ACTIVE,
-          date: now,
-          created_by: adminUserId,
           created_at: now,
-          updated_at: now,
         },
       });
 
@@ -850,6 +955,8 @@ async function main(): Promise<void> {
 
   console.log("🌱 Starting seed database...");
 
+  await seedAppointmentReferenceOptions(now);
+
   // 1) Ensure document_form exists
   await prisma.document_form.upsert({
     where: { form_id: "FORM-UAT" },
@@ -868,6 +975,7 @@ async function main(): Promise<void> {
   const uatBranchId = "BR-UAT-SRC";
   const uatAdminId = "UAT-ADMIN-USER";
   const uatDoctorId = "UAT-DOCTOR-USER";
+  const uatNurseId = "UAT-NURSE-USER";
 
   // Ensure Clinic exists
   await prisma.clinic.upsert({
@@ -933,6 +1041,32 @@ async function main(): Promise<void> {
       updated_at: now,
     },
   });
+
+  await prisma.role.upsert({
+    where: { role_id: role_enum.NURSE },
+    update: { status: record_status.ACTIVE },
+    create: {
+      role_id: role_enum.NURSE,
+      role_description_EN: "Nurse",
+      status: record_status.ACTIVE,
+      operable: true,
+      created_at: now,
+      updated_at: now,
+    },
+  });
+
+  await prisma.role.upsert({
+    where: { role_id: role_enum.THERAPIST },
+    update: { status: record_status.ACTIVE },
+    create: {
+      role_id: role_enum.THERAPIST,
+      role_description_EN: "Therapist",
+      status: record_status.ACTIVE,
+      operable: true,
+      created_at: now,
+      updated_at: now,
+    },
+  });
   
   await prisma.role.upsert({
     where: { role_id: role_enum.DOCTOR },
@@ -962,6 +1096,25 @@ async function main(): Promise<void> {
       hash_password: passwordHash,
       status: record_status.ACTIVE,
       is_clinic_root_user: true,
+      created_at: now,
+      updated_at: now,
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { user_id: uatNurseId },
+    update: { status: record_status.ACTIVE },
+    create: {
+      user_id: uatNurseId,
+      clinic_id: uatClinicId,
+      email: "nurse.test@healthx.local",
+      title: "พว.",
+      name: "แอน",
+      lastname: "ใจดี",
+      nickname: "แอน",
+      hash_password: passwordHash,
+      status: record_status.ACTIVE,
+      is_clinic_root_user: false,
       created_at: now,
       updated_at: now,
     },
@@ -1001,6 +1154,19 @@ async function main(): Promise<void> {
   });
 
   await prisma.user_branch.upsert({
+    where: { user_id_branch_id: { user_id: uatNurseId, branch_id: uatBranchId } },
+    update: { status: record_status.ACTIVE },
+    create: {
+      user_id: uatNurseId,
+      branch_id: uatBranchId,
+      role_id: role_enum.NURSE,
+      status: record_status.ACTIVE,
+      created_at: now,
+      updated_at: now,
+    },
+  });
+
+  await prisma.user_branch.upsert({
     where: { user_id_branch_id: { user_id: uatDoctorId, branch_id: uatBranchId } },
     update: { status: record_status.ACTIVE },
     create: {
@@ -1031,6 +1197,7 @@ async function main(): Promise<void> {
   const ritzBranchId = "76d8b237-ae8f-49d5-b793-91f75f80b5e5"; // สำนักงานใหญ่
   const ritzAdminId = "test-admin-cc61abae-afa5-4807-b3a6-01f649061fca";
   const ritzDoctorId = "16a69f4c-317d-40d9-a503-403befbae363";
+  const ritzNurseId = "RITZ-NURSE-USER";
 
   // Ensure branch relationship is active for doctor in Ritz Clinic
   await prisma.user_branch.upsert({
@@ -1040,6 +1207,38 @@ async function main(): Promise<void> {
       user_id: ritzDoctorId,
       branch_id: ritzBranchId,
       role_id: role_enum.DOCTOR,
+      status: record_status.ACTIVE,
+      created_at: now,
+      updated_at: now,
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { user_id: ritzNurseId },
+    update: { status: record_status.ACTIVE },
+    create: {
+      user_id: ritzNurseId,
+      clinic_id: ritzClinicId,
+      email: "nurse.ritz@healthx.local",
+      title: "พว.",
+      name: "แอน",
+      lastname: "ริทซ์",
+      nickname: "Ann",
+      hash_password: passwordHash,
+      status: record_status.ACTIVE,
+      is_clinic_root_user: false,
+      created_at: now,
+      updated_at: now,
+    },
+  });
+
+  await prisma.user_branch.upsert({
+    where: { user_id_branch_id: { user_id: ritzNurseId, branch_id: ritzBranchId } },
+    update: { status: record_status.ACTIVE },
+    create: {
+      user_id: ritzNurseId,
+      branch_id: ritzBranchId,
+      role_id: role_enum.NURSE,
       status: record_status.ACTIVE,
       created_at: now,
       updated_at: now,

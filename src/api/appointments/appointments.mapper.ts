@@ -27,10 +27,15 @@ export interface AppointmentWithCustomer {
   opd_id: string | null;
   created_at: Date;
   updated_at: Date;
+  marketing_platform?: string | null;
   campaign?: string | null;
   numbing_time?: number | null;
   preparation?: string | null;
+  preparation_tags?: unknown;
   internal_note?: string | null;
+  internal_tags?: unknown;
+  notifications?: unknown;
+  recurring?: unknown;
   customer?: AppointmentCustomer | null;
 }
 
@@ -78,6 +83,9 @@ export class AppointmentView {
   detail!: string | null;
 
   @ApiProperty({ type: String, nullable: true })
+  marketingPlatform!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
   campaign!: string | null;
 
   @ApiProperty({ type: Number, nullable: true })
@@ -86,8 +94,20 @@ export class AppointmentView {
   @ApiProperty({ type: String, nullable: true })
   preparation!: string | null;
 
+  @ApiProperty({ type: [String], nullable: true })
+  preparationTags!: string[] | null;
+
   @ApiProperty({ type: String, nullable: true })
   internalNote!: string | null;
+
+  @ApiProperty({ type: [String], nullable: true })
+  internalTags!: string[] | null;
+
+  @ApiProperty({ type: Object, nullable: true })
+  notifications!: unknown;
+
+  @ApiProperty({ type: Object, nullable: true })
+  recurring!: unknown;
 
   @ApiProperty({ enum: statusAppointment, enumName: "StatusAppointment" })
   status!: statusAppointment;
@@ -122,15 +142,24 @@ export function toAppointmentView(row: AppointmentWithCustomer): AppointmentView
     isConsult: row.is_consult,
     applyAnesthetic: row.apply_anesthetic,
     detail: row.appointment_detail,
+    marketingPlatform: row.marketing_platform ?? null,
     campaign: row.campaign ?? null,
     numbingTime: row.numbing_time ?? null,
     preparation: row.preparation ?? null,
+    preparationTags: arrayOrNull(row.preparation_tags),
     internalNote: row.internal_note ?? null,
+    internalTags: arrayOrNull(row.internal_tags),
+    notifications: row.notifications ?? null,
+    recurring: row.recurring ?? null,
     status: row.status_appointment,
     opdId: row.opd_id,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+function arrayOrNull(value: unknown): string[] | null {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : null;
 }
 
 export class AppointmentOption {

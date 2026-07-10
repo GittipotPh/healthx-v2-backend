@@ -131,10 +131,17 @@ Top remaining items: fetch-then-check scoping in `queue.repository.findAppointme
 (#12), the audit-in-tx vs best-effort policy decision (#28), and — from the 2026-07-07
 filter-options review — `CustomersRepository.findMany`'s unbounded relation includes
 (#49, the main list-perf bug: loads every sale_order/wallet_log per customer to compute
-card aggregates; aggregate in SQL instead) plus options-endpoint nits (#50). See
-`AGENTS.md`'s "Database Client and Transaction Rules", "DTO and Validation Rules",
-"Repository Rules" (bounded-includes + options-endpoint conventions), and "Security
-Rules" for the standing rules these findings turned into.
+card aggregates; aggregate in SQL instead) plus options-endpoint nits (#50). The
+2026-07-07 **customer-module review session is DONE** (#51–58: profile sub-endpoints now
+use narrow slice queries instead of re-running the profile mega-include; swallowed
+`.catch(() => [])` reads removed; file delete/upload are row-first with compensation +
+logging; `markFileDeleted` scope-filtered; appointment "upcoming" anchored to `+07:00`;
+shared `common/decimal.ts` + `CUSTOMER_CARD_INCLUDE`) — #59 (Prisma `GetPayload` typing
+for repository rows) stays open. See `AGENTS.md`'s "Database Client and Transaction
+Rules", "DTO and Validation Rules", "Service Rules" (no default-empty reads, blob-vs-row
+ordering, +07:00 anchoring), "Repository Rules" (bounded-includes, narrow slices, scoped
+writes, options-endpoint conventions), and "Security Rules" for the standing rules these
+findings turned into.
 
 ## Validation Commands
 

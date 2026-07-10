@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsArray, IsBoolean, IsInt, IsOptional, IsString, Matches, MaxLength } from "class-validator";
+import { IsArray, IsBoolean, IsInt, IsObject, IsOptional, IsString, Matches, MaxLength } from "class-validator";
 
 /**
  * Date/time columns on the legacy `appointment` table are VARCHAR and are
@@ -19,6 +19,12 @@ const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
  * ComprehensiveAppointmentModal wiring is a separate, larger task.
  */
 export class CreateAppointmentDto {
+  @ApiPropertyOptional({ maxLength: 50 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  branchId?: string;
+
   @ApiProperty({ maxLength: 50 })
   @IsString()
   @MaxLength(50)
@@ -97,6 +103,12 @@ export class CreateAppointmentDto {
   @IsOptional()
   @IsString()
   @MaxLength(120)
+  marketingPlatform?: string;
+
+  @ApiPropertyOptional({ maxLength: 120 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
   campaign?: string;
 
   @ApiPropertyOptional()
@@ -109,8 +121,30 @@ export class CreateAppointmentDto {
   @IsString()
   preparation?: string;
 
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  preparationTags?: string[];
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   internalNote?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  internalTags?: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  notifications?: Record<string, unknown>;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  recurring?: Record<string, unknown>;
 }

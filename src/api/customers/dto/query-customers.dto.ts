@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
-import { IsBooleanString, IsIn, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { IsIn, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
 
 export const CUSTOMER_PAYMENT_FILTERS = ["outstanding", "deposit", "clear"] as const;
 export type CustomerPaymentFilter = (typeof CUSTOMER_PAYMENT_FILTERS)[number];
@@ -20,7 +20,7 @@ export class QueryCustomersDto {
   /** "true" | "false" — filter by VIP status. */
   @ApiPropertyOptional({ enum: ["true", "false"], description: "Filter by VIP status" })
   @IsOptional()
-  @IsBooleanString()
+  @IsIn(["true", "false"])
   vip?: string;
 
   @ApiPropertyOptional({ description: "Customer group id" })

@@ -13,16 +13,11 @@ import {
   type CustomerWithCardRelations,
   toCustomerView,
 } from "./customers.mapper";
+import { decimalToNumber } from "../../common/decimal";
 
-type DecimalLike = { toNumber: () => number };
-
-function decimalToNumber(value: unknown): number {
-  if (value == null) return 0;
-  if (typeof value === "number") return value;
-  if (typeof value === "string") return Number(value) || 0;
-  if (typeof value === "object" && "toNumber" in value) return (value as DecimalLike).toNumber();
-  return Number(value) || 0;
-}
+// Appointment date/time columns store Bangkok wall-clock strings; anchor them to
+// the clinic offset so "upcoming" checks don't drift when the server runs in UTC.
+const CLINIC_UTC_OFFSET = "+07:00";
 
 function iso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
@@ -46,7 +41,7 @@ function combineAddress(row: CustomerProfileRow): string | null {
 
 function dateTimeOf(date: string | null | undefined, time?: string | null): Date | null {
   if (!date) return null;
-  const parsed = new Date(`${date}T${time || "00:00"}:00`);
+  const parsed = new Date(`${date}T${time || "00:00"}:00${CLINIC_UTC_OFFSET}`);
   if (!Number.isNaN(parsed.getTime())) return parsed;
 
   const fallback = new Date(date);

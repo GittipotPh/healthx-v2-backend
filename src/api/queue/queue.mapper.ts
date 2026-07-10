@@ -1,6 +1,19 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { statusAppointment, type customer_info } from "@prisma/client";
-import { STEP_TO_APPOINTMENT_STATUS } from "./queue.constants";
+import { statusAppointment, type customer_info, type queue_config } from "@prisma/client";
+import { QUEUE_STEP_COLUMNS, stepCodeToColumnId } from "./queue.constants";
+import {
+  QueueAutomationSettingDto,
+  QueueColumnSettingDto,
+  QueueNotificationsSettingDto,
+  QueueSlaSettingDto,
+  QueueTrackingSettingDto,
+  QueueTransitionsSettingDto,
+  type SaveQueueConfigDto,
+} from "./dto/save-queue-config.dto";
+
+// Re-exported for existing consumers; the definitions moved to queue.constants
+// so DTOs can use them without importing this mapper (avoids an import cycle).
+export { QUEUE_STEP_COLUMNS, stepCodeToColumnId };
 
 export interface AppointmentRecord {
   appointment_id: string;
@@ -34,11 +47,6 @@ export interface AppointmentForQueue extends AppointmentRecord {
   opd?: { status_opd: string } | null;
 }
 
-/** `ref_queue_step_status.code` (e.g. "PENDING_PAYMENT") -> Kanban column id ("pending-payment"). */
-export function stepCodeToColumnId(code: string): string {
-  return code.toLowerCase().replace(/_/g, "-");
-}
-
 export const QUEUE_STATUSES = [
   "confirmed",
   "in-service",
@@ -48,9 +56,6 @@ export const QUEUE_STATUSES = [
 ] as const;
 
 export type QueueStatus = (typeof QUEUE_STATUSES)[number];
-
-/** Kanban column ids: the seeded `ref_queue_step_status` catalog, lowercased/dashed. */
-export const QUEUE_STEP_COLUMNS = Object.keys(STEP_TO_APPOINTMENT_STATUS).map(stepCodeToColumnId);
 
 export class QueueItemView {
   @ApiProperty()
@@ -205,5 +210,98 @@ export function toQueueItemView(
     cancelHistory: history?.cancelHistory ?? 0,
     lateHistory: history?.lateHistory ?? 0,
     rescheduleHistory: history?.rescheduleHistory ?? 0,
+  };
+}
+
+/**
+ * API view of a branch's queue configuration. `queueConfigId`/timestamps are
+ * null when serving the built-in defaults (no row persisted yet). Section
+ * shapes reuse the save DTO classes so the wire contract is single-sourced.
+ */
+export class QueueConfigView {
+  @ApiProperty({ type: String, nullable: true, description: "null when serving unsaved defaults" })
+  queueConfigId!: string | null;
+
+  @ApiProperty()
+  clinicId!: string;
+
+  @ApiProperty()
+  branchId!: string;
+
+  @ApiProperty({ type: [QueueColumnSettingDto] })
+  columns!: QueueColumnSettingDto[];
+
+  @ApiProperty({ type: [QueueSlaSettingDto] })
+  sla!: QueueSlaSettingDto[];
+
+  @ApiProperty({ type: QueueTransitionsSettingDto })
+  transitions!: QueueTransitionsSettingDto;
+
+  @ApiProperty({ type: QueueAutomationSettingDto })
+  automation!: QueueAutomationSettingDto;
+
+  @ApiProperty({ type: QueueTrackingSettingDto })
+  tracking!: QueueTrackingSettingDto;
+
+  @ApiProperty({ type: QueueNotificationsSettingDto })
+  notifications!: QueueNotificationsSettingDto;
+
+  @ApiProperty({
+    type: "object",
+    additionalProperties: { type: "array", items: { type: "string" } },
+    description: "Column id -> roles allowed to act on that column",
+  })
+  permissions!: Record<string, string[]>;
+
+  @ApiProperty({ type: String, nullable: true })
+  updatedBy!: string | null;
+
+  @ApiProperty({ type: String, nullable: true, description: "ISO timestamp; null for unsaved defaults" })
+  updatedAt!: string | null;
+
+  @ApiProperty({ type: String, nullable: true, description: "ISO timestamp; null for unsaved defaults" })
+  createdAt!: string | null;
+}
+
+export function toQueueConfigView(row: queue_config): QueueConfigView {
+  return {
+    queueConfigId: row.queue_config_id,
+    clinicId: row.clinic_id,
+    branchId: row.branch_id,
+    // Json columns: rows are only written through the validated SaveQueueConfigDto,
+    // so these casts restate the write-side contract rather than invent one.
+    columns: row.columns as unknown as QueueColumnSettingDto[],
+    sla: row.sla as unknown as QueueSlaSettingDto[],
+    transitions: row.transitions as unknown as QueueTransitionsSettingDto,
+    automation: row.automation as unknown as QueueAutomationSettingDto,
+    tracking: row.tracking as unknown as QueueTrackingSettingDto,
+    notifications: row.notifications as unknown as QueueNotificationsSettingDto,
+    permissions: row.permissions as unknown as Record<string, string[]>,
+    updatedBy: row.updated_by,
+    updatedAt: row.updated_at.toISOString(),
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+/** The built-in defaults presented as a (non-persisted) view for GET. */
+export function defaultQueueConfigView(
+  clinicId: string,
+  branchId: string,
+  defaults: SaveQueueConfigDto,
+): QueueConfigView {
+  return {
+    queueConfigId: null,
+    clinicId,
+    branchId,
+    columns: defaults.columns,
+    sla: defaults.sla,
+    transitions: defaults.transitions,
+    automation: defaults.automation,
+    tracking: defaults.tracking,
+    notifications: defaults.notifications,
+    permissions: defaults.permissions,
+    updatedBy: null,
+    updatedAt: null,
+    createdAt: null,
   };
 }

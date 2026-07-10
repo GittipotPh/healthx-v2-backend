@@ -1,15 +1,6 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { document_status, record_status, sale_order_status, usage_log_status, type customer } from "@prisma/client";
-
-type DecimalLike = { toNumber: () => number };
-
-function decimalToNumber(value: unknown): number {
-  if (value == null) return 0;
-  if (typeof value === "number") return value;
-  if (typeof value === "string") return Number(value) || 0;
-  if (typeof value === "object" && "toNumber" in value) return (value as DecimalLike).toNumber();
-  return Number(value) || 0;
-}
+import { decimalToNumber } from "../../common/decimal";
 
 export type CustomerWithCardRelations = customer & {
   attendant_detail?: { name: string | null; lastname: string | null; nickname: string | null } | null;

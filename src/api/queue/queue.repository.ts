@@ -4,12 +4,14 @@ import type {
   appointment_consultation,
   Prisma,
   queue_status,
+  queue_config,
   statusAppointment,
 } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import type { AppointmentForQueue, AppointmentRecord } from "./queue.mapper";
 import type { SaveConsultationDto } from "./dto/save-consultation.dto";
 import type { SaveAnestheticDto } from "./dto/save-anesthetic.dto";
+import { SaveQueueConfigDto } from "./dto/save-queue-config.dto";
 
 const APPOINTMENT_RECORD_SELECT = {
   appointment_id: true,
@@ -287,5 +289,142 @@ export class QueueRepository {
     });
 
     return result;
+  }
+
+  // queue_config is keyed by branch_id alone (unique), but reads/writes always
+  // scope by clinic too: ScopeGuard proves the branch belongs to the clinic, so
+  // adding clinic_id is defense-in-depth against a drifted/foreign row.
+  async findQueueConfig(clinicId: string, branchId: string): Promise<queue_config | null> {
+    return this.prisma.queue_config.findFirst({
+      where: { branch_id: branchId, clinic_id: clinicId },
+    });
+  }
+
+  async upsertQueueConfig(
+    clinicId: string,
+    branchId: string,
+    data: SaveQueueConfigDto,
+    userId?: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<queue_config> {
+    const now = new Date();
+    const sections = {
+      columns: data.columns as unknown as Prisma.InputJsonValue,
+      sla: data.sla as unknown as Prisma.InputJsonValue,
+      transitions: data.transitions as unknown as Prisma.InputJsonValue,
+      automation: data.automation as unknown as Prisma.InputJsonValue,
+      tracking: data.tracking as unknown as Prisma.InputJsonValue,
+      notifications: data.notifications as unknown as Prisma.InputJsonValue,
+      permissions: data.permissions as Prisma.InputJsonValue,
+    };
+    return tx.queue_config.upsert({
+      where: { branch_id: branchId },
+      create: {
+        clinic_id: clinicId,
+        branch_id: branchId,
+        ...sections,
+        updated_by: userId,
+        updated_at: now,
+        created_at: now,
+      },
+      update: {
+        // Re-stamp clinic_id so a row that ever drifted from its branch's real
+        // clinic converges to the ScopeGuard-validated pair instead of keeping
+        // the mismatch forever.
+        clinic_id: clinicId,
+        ...sections,
+        updated_by: userId,
+        updated_at: now,
+      },
+    });
+  }
+
+  async countActiveCardsInStep(
+    clinicId: string,
+    branchId: string,
+    stepCode: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<number> {
+    return tx.queue_status.count({
+      where: {
+        clinic_id: clinicId,
+        branch_id: branchId,
+        current_step: stepCode,
+      },
+    });
+  }
+
+  async hasAssignedDoctor(
+    appointmentId: string,
+    branchId: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<boolean> {
+    const count = await tx.user_appointment.count({
+      where: {
+        appointment_id: appointmentId,
+        user: {
+          user_branch: {
+            some: {
+              branch_id: branchId,
+              role_id: "DOCTOR",
+              status: "ACTIVE",
+            },
+          },
+        },
+      },
+    });
+    return count > 0;
+  }
+
+  async hasAnesthetic(
+    appointmentId: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<boolean> {
+    const count = await tx.appointment_anesthetic.count({
+      where: { appointment_id: appointmentId },
+    });
+    return count > 0;
+  }
+
+  async hasUnpaidPrescriptions(
+    opdId: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<boolean> {
+    const prescriptions = await tx.prescription.findMany({
+      where: { opd_id: opdId },
+      include: { sale_order: true },
+    });
+    if (prescriptions.length === 0) return false;
+    return prescriptions.some(
+      (p) => p.sale_order && p.sale_order.sale_order_status !== "PAID",
+    );
+  }
+
+  async hasPrescriptions(
+    opdId: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<boolean> {
+    const count = await tx.prescription.count({
+      where: { opd_id: opdId },
+    });
+    return count > 0;
+  }
+
+  async hasUsedCourse(
+    opdId: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<boolean> {
+    const opd = await tx.opd.findFirst({
+      where: { opd_id: opdId },
+      select: { management_item: true },
+    });
+    if (!opd || !opd.management_item) return false;
+    const count = await tx.service_usage.count({
+      where: {
+        service_usage_id: opd.management_item,
+        service_usage_status: "APPROVED",
+      },
+    });
+    return count > 0;
   }
 }

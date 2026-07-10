@@ -9,6 +9,7 @@ import type { AppointmentWithCustomer } from "./appointments.mapper";
 import type { AppointmentOptionsRepository } from "./appointment-options.repository";
 import type { CustomersService } from "../customers/customers.service";
 import type { AuditLogService } from "../audit-log/audit-log.service";
+import type { BranchAccessService } from "../../common/branch-access/branch-access.service";
 import type { PrismaService } from "../../prisma.service";
 import type { RequestScope } from "../../auth/auth.types";
 import { INITIAL_QUEUE_STEP } from "../queue/queue.constants";
@@ -74,14 +75,19 @@ function makeService(options: { opdExists?: boolean } = {}) {
     record: jest.fn().mockResolvedValue(null),
   } as unknown as AuditLogService;
 
+  const branchAccessService = {
+    findAccessibleBranches: jest.fn().mockResolvedValue([]),
+  } as unknown as BranchAccessService;
+
   const service = new AppointmentsService(
     repository,
     {} as AppointmentOptionsRepository,
     customersService,
     auditLogService,
+    branchAccessService,
   );
 
-  return { service, repository, customersService, auditLogService };
+  return { service, repository, customersService, auditLogService, branchAccessService };
 }
 
 describe("CreateAppointmentDto", () => {

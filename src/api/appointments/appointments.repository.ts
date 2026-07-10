@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { statusAppointment, type Prisma } from "@prisma/client";
+import { operator_type, statusAppointment, type Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import { INITIAL_QUEUE_STEP } from "../queue/queue.constants";
 import type { AppointmentWithCustomer } from "./appointments.mapper";
@@ -38,7 +38,7 @@ export class AppointmentsRepository {
       this.prisma.appointment.count({ where }),
     ]);
 
-    return { items, total, page, pageSize };
+    return { items: await this.attachExtras(items), total, page, pageSize };
   }
 
   /**
@@ -88,7 +88,31 @@ export class AppointmentsRepository {
         },
       });
 
-      return created;
+      const userAssignments = this.userAssignments(appointmentId, dto);
+      if (userAssignments.length > 0) {
+        await tx.user_appointment.createMany({
+          data: userAssignments,
+          skipDuplicates: true,
+        });
+      }
+
+      const procedureIds = this.unique(dto.procedures ?? []);
+      if (procedureIds.length > 0) {
+        await tx.operation_appointment.createMany({
+          data: procedureIds.map((productId) => ({
+            appointment_id: appointmentId,
+            product_id: productId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      const extraData = this.extraData(appointmentId, dto, scope, now);
+      const extra = extraData
+        ? await tx.appointment_detail_extra.create({ data: extraData })
+        : null;
+
+      return this.mergeExtra(created, extra);
     });
   }
 
@@ -110,7 +134,7 @@ export class AppointmentsRepository {
   }
 
   async findOne(id: string, scope: RequestScope): Promise<AppointmentWithCustomer | null> {
-    return this.prisma.appointment.findFirst({
+    const found = await this.prisma.appointment.findFirst({
       where: {
         appointment_id: id,
         clinic_id: scope.clinicId,
@@ -118,6 +142,8 @@ export class AppointmentsRepository {
       },
       include: { customer: true },
     });
+
+    return found ? this.attachExtra(found) : null;
   }
 
   async reschedule(
@@ -126,7 +152,7 @@ export class AppointmentsRepository {
     scope: RequestScope,
   ): Promise<AppointmentWithCustomer> {
     const now = new Date();
-    return this.prisma.appointment.update({
+    const updated = await this.prisma.appointment.update({
       where: {
         appointment_id: id,
       },
@@ -139,6 +165,8 @@ export class AppointmentsRepository {
       },
       include: { customer: true },
     });
+
+    return this.attachExtra(updated);
   }
 
 
@@ -160,5 +188,127 @@ export class AppointmentsRepository {
     }
 
     return where;
+  }
+
+  private async attachExtras<T extends AppointmentWithCustomer>(
+    appointments: T[],
+  ): Promise<AppointmentWithCustomer[]> {
+    if (appointments.length === 0) return appointments;
+
+    const extras = await this.prisma.appointment_detail_extra.findMany({
+      where: {
+        appointment_id: {
+          in: appointments.map((appointment) => appointment.appointment_id),
+        },
+      },
+    });
+    const extrasByAppointmentId = new Map(
+      extras.map((extra) => [extra.appointment_id, extra]),
+    );
+
+    return appointments.map((appointment) =>
+      this.mergeExtra(appointment, extrasByAppointmentId.get(appointment.appointment_id) ?? null),
+    );
+  }
+
+  private async attachExtra<T extends AppointmentWithCustomer>(
+    appointment: T,
+  ): Promise<AppointmentWithCustomer> {
+    const extra = await this.prisma.appointment_detail_extra.findUnique({
+      where: { appointment_id: appointment.appointment_id },
+    });
+    return this.mergeExtra(appointment, extra);
+  }
+
+  private mergeExtra<T extends AppointmentWithCustomer>(
+    appointment: T,
+    extra:
+      | {
+          marketing_platform?: string | null;
+          campaign?: string | null;
+          numbing_time?: number | null;
+          preparation?: string | null;
+          preparation_tags?: Prisma.JsonValue | null;
+          internal_note?: string | null;
+          internal_tags?: Prisma.JsonValue | null;
+          notifications?: Prisma.JsonValue | null;
+          recurring?: Prisma.JsonValue | null;
+        }
+      | null,
+  ): AppointmentWithCustomer {
+    if (!extra) return appointment;
+
+    return {
+      ...appointment,
+      marketing_platform: extra.marketing_platform ?? null,
+      campaign: extra.campaign ?? null,
+      numbing_time: extra.numbing_time ?? null,
+      preparation: extra.preparation ?? null,
+      preparation_tags: extra.preparation_tags ?? null,
+      internal_note: extra.internal_note ?? null,
+      internal_tags: extra.internal_tags ?? null,
+      notifications: extra.notifications ?? null,
+      recurring: extra.recurring ?? null,
+    };
+  }
+
+  private extraData(
+    appointmentId: string,
+    dto: CreateAppointmentDto,
+    scope: RequestScope,
+    now: Date,
+  ): Prisma.appointment_detail_extraCreateInput | null {
+    const hasExtra =
+      dto.marketingPlatform ||
+      dto.campaign ||
+      dto.numbingTime !== undefined ||
+      dto.preparation ||
+      (dto.preparationTags?.length ?? 0) > 0 ||
+      dto.internalNote ||
+      (dto.internalTags?.length ?? 0) > 0 ||
+      dto.notifications ||
+      dto.recurring;
+
+    if (!hasExtra) return null;
+
+    return {
+      appointment_id: appointmentId,
+      clinic_id: scope.clinicId,
+      branch_id: scope.branchId,
+      marketing_platform: dto.marketingPlatform,
+      campaign: dto.campaign,
+      numbing_time: dto.numbingTime,
+      preparation: dto.preparation,
+      preparation_tags: dto.preparationTags ?? undefined,
+      internal_note: dto.internalNote,
+      internal_tags: dto.internalTags ?? undefined,
+      notifications: dto.notifications as Prisma.InputJsonValue | undefined,
+      recurring: dto.recurring as Prisma.InputJsonValue | undefined,
+      created_by: scope.userId,
+      updated_at: now,
+      created_at: now,
+    };
+  }
+
+  private userAssignments(
+    appointmentId: string,
+    dto: CreateAppointmentDto,
+  ): Prisma.user_appointmentCreateManyInput[] {
+    return [
+      ...this.unique(dto.doctors ?? []).map((userId) => ({
+        appointment_id: appointmentId,
+        user_id: userId,
+        operator_type: operator_type.OPERATOR,
+      })),
+      ...this.unique(dto.assistants ?? []).map((userId) => ({
+        appointment_id: appointmentId,
+        user_id: userId,
+        operator_type: operator_type.ASSISTANT,
+      })),
+    ];
+  }
+
+  private unique(values: string[]): string[] {
+    return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
   }
 }

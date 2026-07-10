@@ -7,10 +7,12 @@ import {
   QueueTodayResult,
   QueueTransitionResult,
 } from "./queue.service";
+import { QueueConfigView } from "./queue.mapper";
 import { QueryQueueDto } from "./dto/query-queue.dto";
 import { TransitionQueueDto } from "./dto/transition-queue.dto";
 import { SaveConsultationDto } from "./dto/save-consultation.dto";
 import { SaveAnestheticDto } from "./dto/save-anesthetic.dto";
+import { SaveQueueConfigDto } from "./dto/save-queue-config.dto";
 import {
   BaseOpenApiErrorResponses,
   BaseOpenApiResponse,
@@ -58,5 +60,21 @@ export class QueueController {
     @CurrentPrincipal() principal: Principal,
   ): Promise<QueueAnestheticResult> {
     return this.queueService.saveAnesthetic(dto, scope, principal);
+  }
+
+  @Get("config")
+  @BaseOpenApiResponse(QueueConfigView)
+  getConfig(@Scope() scope: RequestScope): Promise<QueueConfigView> {
+    return this.queueService.getQueueConfig(scope);
+  }
+
+  @Post("config")
+  @BaseOpenApiResponse(QueueConfigView, { status: 201 })
+  updateConfig(
+    @Body() dto: SaveQueueConfigDto,
+    @Scope() scope: RequestScope,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<QueueConfigView> {
+    return this.queueService.updateQueueConfig(dto, scope, principal);
   }
 }

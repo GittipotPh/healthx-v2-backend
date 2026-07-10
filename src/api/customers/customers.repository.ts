@@ -17,6 +17,57 @@ export interface PaginatedCustomers {
   pageSize: number;
 }
 
+/** Relations the customer-card aggregate needs; shared by findMany/findOne. */
+const CUSTOMER_CARD_INCLUDE = {
+  attendant_detail: {
+    select: { name: true, lastname: true, nickname: true },
+  },
+  customer_attendant: {
+    where: { status: record_status.ACTIVE },
+    include: {
+      user: { select: { name: true, lastname: true, nickname: true } },
+    },
+    take: 1,
+  },
+  documents_signed_customer: {
+    select: { status: true },
+  },
+  customer_coures: {
+    include: {
+      course_item: { select: { name: true } },
+    },
+    orderBy: { created_at: "desc" },
+  },
+  customer_course_usage_log: {
+    select: {
+      item_id: true,
+      expire_date: true,
+      amount: true,
+      status: true,
+    },
+  },
+  customer_wallet: {
+    select: {
+      amount: true,
+      bonus: true,
+      status: true,
+    },
+  },
+  wallet_log: {
+    select: {
+      in: true,
+      out: true,
+    },
+  },
+  sale_order: {
+    select: {
+      totalDue: true,
+      sale_order_status: true,
+      status: true,
+    },
+  },
+} satisfies Prisma.customerInclude;
+
 @Injectable()
 export class CustomersRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -95,55 +146,7 @@ export class CustomersRepository {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.customer.findMany({
         where,
-        include: {
-          attendant_detail: {
-            select: { name: true, lastname: true, nickname: true },
-          },
-          customer_attendant: {
-            where: { status: record_status.ACTIVE },
-            include: {
-              user: { select: { name: true, lastname: true, nickname: true } },
-            },
-            take: 1,
-          },
-          documents_signed_customer: {
-            select: { status: true },
-          },
-          customer_coures: {
-            include: {
-              course_item: { select: { name: true } },
-            },
-            orderBy: { created_at: "desc" },
-          },
-          customer_course_usage_log: {
-            select: {
-              item_id: true,
-              expire_date: true,
-              amount: true,
-              status: true,
-            },
-          },
-          customer_wallet: {
-            select: {
-              amount: true,
-              bonus: true,
-              status: true,
-            },
-          },
-          wallet_log: {
-            select: {
-              in: true,
-              out: true,
-            },
-          },
-          sale_order: {
-            select: {
-              totalDue: true,
-              sale_order_status: true,
-              status: true,
-            },
-          },
-        },
+        include: CUSTOMER_CARD_INCLUDE,
         orderBy: { created_at: "desc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -157,55 +160,7 @@ export class CustomersRepository {
   async findOne(customerId: string, clinicId: string): Promise<CustomerWithCardRelations | null> {
     return this.prisma.customer.findUnique({
       where: { customer_id_clinic_id: { customer_id: customerId, clinic_id: clinicId } },
-      include: {
-        attendant_detail: {
-          select: { name: true, lastname: true, nickname: true },
-        },
-        customer_attendant: {
-          where: { status: record_status.ACTIVE },
-          include: {
-            user: { select: { name: true, lastname: true, nickname: true } },
-          },
-          take: 1,
-        },
-        documents_signed_customer: {
-          select: { status: true },
-        },
-        customer_coures: {
-          include: {
-            course_item: { select: { name: true } },
-          },
-          orderBy: { created_at: "desc" },
-        },
-        customer_course_usage_log: {
-          select: {
-            item_id: true,
-            expire_date: true,
-            amount: true,
-            status: true,
-          },
-        },
-        customer_wallet: {
-          select: {
-            amount: true,
-            bonus: true,
-            status: true,
-          },
-        },
-        wallet_log: {
-          select: {
-            in: true,
-            out: true,
-          },
-        },
-        sale_order: {
-          select: {
-            totalDue: true,
-            sale_order_status: true,
-            status: true,
-          },
-        },
-      },
+      include: CUSTOMER_CARD_INCLUDE,
     });
   }
 
@@ -357,6 +312,195 @@ export class CustomersRepository {
     return row as CustomerProfileRow | null;
   }
 
+  /** Appointments only — for GET :customerId/appointments (no profile mega-query). */
+  async findAppointmentSlice(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<CustomerProfileRow | null> {
+    console.log({scope})
+    const row = await this.prisma.customer.findUnique({
+      where: {
+        customer_id_clinic_id: { customer_id: customerId, clinic_id: scope.clinicId },
+      },
+      include: {
+        appointment: {
+          where: {
+            clinic_id: scope.clinicId,
+            branch_id: scope.branchId,
+          },
+          select: {
+            appointment_id: true,
+            branch_id: true,
+            date_appointment: true,
+            start_time: true,
+            end_time: true,
+            appointment_detail: true,
+            status_appointment: true,
+            created_at: true,
+            branch: { select: { branch_name: true } },
+            user_appointment: {
+              include: {
+                user: { select: { name: true, lastname: true, nickname: true } },
+              },
+            },
+            operation_appointment: {
+              include: {
+                operation_item: { select: { title: true } },
+              },
+            },
+          },
+          orderBy: [{ date_appointment: "desc" }, { start_time: "desc" }],
+          take: 50,
+        },
+      },
+    });
+
+    return row as CustomerProfileRow | null;
+  }
+
+  /** Sale orders/receipts + wallets — for GET :customerId/financials. */
+  async findFinancialSlice(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<CustomerProfileRow | null> {
+    const row = await this.prisma.customer.findUnique({
+      where: {
+        customer_id_clinic_id: { customer_id: customerId, clinic_id: scope.clinicId },
+      },
+      include: {
+        customer_wallet: {
+          where: { branch_id: scope.branchId },
+          select: { amount: true, bonus: true, status: true },
+        },
+        wallet_log: {
+          where: { branch_id: scope.branchId },
+          select: {
+            wallet_log_id: true,
+            in: true,
+            out: true,
+            type: true,
+            created_at: true,
+          },
+          orderBy: { created_at: "desc" },
+          take: 50,
+        },
+        sale_order: {
+          where: { branch_id: scope.branchId },
+          include: {
+            receipt: {
+              include: {
+                clinic_payment_method: {
+                  select: { name: true, payment_type: true },
+                },
+              },
+              orderBy: { created_at: "desc" },
+            },
+          },
+          orderBy: { created_at: "desc" },
+          take: 50,
+        },
+      },
+    });
+
+    return row as CustomerProfileRow | null;
+  }
+
+  /** Signed documents only — for GET :customerId/documents (files come from findFiles). */
+  async findDocumentSlice(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<CustomerProfileRow | null> {
+    const row = await this.prisma.customer.findUnique({
+      where: {
+        customer_id_clinic_id: { customer_id: customerId, clinic_id: scope.clinicId },
+      },
+      include: {
+        documents_signed_customer: {
+          include: {
+            documents_signed: {
+              select: {
+                document_name: true,
+                purpose_use: true,
+                document_type: true,
+                document_url: true,
+              },
+            },
+          },
+          orderBy: { created_at: "desc" },
+        },
+      },
+    });
+
+    return row as CustomerProfileRow | null;
+  }
+
+  /** OPD, courses, wallet log, signed docs — for GET :customerId/timeline
+   *  (notes/files come from findNotes/findFiles). */
+  async findTimelineSlice(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<CustomerProfileRow | null> {
+    const row = await this.prisma.customer.findUnique({
+      where: {
+        customer_id_clinic_id: { customer_id: customerId, clinic_id: scope.clinicId },
+      },
+      include: {
+        opd: {
+          where: {
+            clinic_id: scope.clinicId,
+            branch_id: scope.branchId,
+          },
+          include: {
+            user: { select: { name: true, lastname: true, nickname: true } },
+          },
+          orderBy: { opd_date: "desc" },
+          take: 50,
+        },
+        customer_coures: {
+          where: { branch_id: scope.branchId },
+          include: {
+            course_item: { select: { name: true } },
+          },
+          orderBy: { created_at: "desc" },
+        },
+        customer_course_usage_log: {
+          where: { branch_id: scope.branchId },
+          include: {
+            course_item: { select: { name: true } },
+          },
+          orderBy: { created_at: "desc" },
+        },
+        wallet_log: {
+          where: { branch_id: scope.branchId },
+          select: {
+            wallet_log_id: true,
+            in: true,
+            out: true,
+            type: true,
+            created_at: true,
+          },
+          orderBy: { created_at: "desc" },
+          take: 50,
+        },
+        documents_signed_customer: {
+          include: {
+            documents_signed: {
+              select: {
+                document_name: true,
+                purpose_use: true,
+                document_type: true,
+                document_url: true,
+              },
+            },
+          },
+          orderBy: { created_at: "desc" },
+        },
+      },
+    });
+
+    return row as CustomerProfileRow | null;
+  }
+
   async findNotes(customerId: string, scope: RequestScope): Promise<CustomerNoteWithUser[]> {
     const rows = await this.prisma.customer_note.findMany({
       where: {
@@ -483,8 +627,12 @@ export class CustomersRepository {
   }
 
   async markFileDeleted(fileId: string, scope: RequestScope): Promise<void> {
-    await this.prisma.customer_file.update({
-      where: { file_id: fileId },
+    await this.prisma.customer_file.updateMany({
+      where: {
+        file_id: fileId,
+        clinic_id: scope.clinicId,
+        branch_id: scope.branchId,
+      },
       data: {
         status: record_status.DELETED,
         updated_at: new Date(),

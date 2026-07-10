@@ -96,6 +96,26 @@ model appointment {
   user_appointment      user_appointment[]
 }
 
+model appointment_detail_extra {
+  appointment_id     String   @id @db.VarChar(50)
+  clinic_id          String   @db.VarChar(50)
+  branch_id          String   @db.VarChar(50)
+  marketing_platform String?  @db.VarChar(120)
+  campaign           String?  @db.VarChar(120)
+  numbing_time       Int?
+  preparation        String?
+  preparation_tags   Json?
+  internal_note      String?
+  internal_tags      Json?
+  notifications      Json?
+  recurring          Json?
+  created_by         String?  @db.VarChar(50)
+  updated_at         DateTime @db.Timestamp(6)
+  created_at         DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([clinic_id, branch_id])
+}
+
 model user_appointment {
   appointment_id String        @db.VarChar(50)
   user_id        String        @db.VarChar(50)
@@ -2102,6 +2122,24 @@ model ref_queue_step_status {
   created_at   DateTime       @default(now()) @db.Timestamp(6)
   updated_at   DateTime       @db.Timestamp(6)
   queue_status queue_status[]
+}
+
+model ref_appointment_option {
+  option_id  String   @id @db.VarChar(80)
+  clinic_id  String?  @db.VarChar(50)
+  branch_id  String?  @db.VarChar(50)
+  type       String   @db.VarChar(50)
+  code       String   @db.VarChar(100)
+  label_th   String   @db.VarChar(200)
+  label_en   String?  @db.VarChar(200)
+  sort_order Int
+  is_active  Boolean  @default(true)
+  metadata   Json?
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @db.Timestamp(6)
+
+  @@index([clinic_id, branch_id])
+  @@index([type, is_active, sort_order])
 }
 
 model queue_status {
