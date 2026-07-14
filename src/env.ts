@@ -28,6 +28,12 @@ export interface BackendEnv {
   CUSTOMER_FILE_MAX_BYTES: number;
   CORS_ORIGINS?: string;
   AUTH_COOKIE_DOMAIN?: string;
+  ERP_OUTBOX_ENABLED: boolean;
+  RABBITMQ_URL?: string;
+  ERP_OUTBOX_POLL_MS: number;
+  ERP_COMMAND_API_ENABLED: boolean;
+  ERP_SERVICE_KEY?: string;
+  ERP_ALLOWED_BRANCH_IDS?: string;
 }
 
 const schema = Joi.object<BackendEnv>({
@@ -93,6 +99,28 @@ const schema = Joi.object<BackendEnv>({
     otherwise: Joi.string().optional(),
   }),
   AUTH_COOKIE_DOMAIN: Joi.string().optional(),
+  // ERP boundary (plan-latest §9): capability gates fail fast — enabling a
+  // capability without its config is a boot error, not a runtime surprise.
+  ERP_OUTBOX_ENABLED: Joi.boolean().default(false),
+  RABBITMQ_URL: Joi.when("ERP_OUTBOX_ENABLED", {
+    is: true,
+    then: Joi.string().uri({ scheme: ["amqp", "amqps"] }).required(),
+    otherwise: Joi.string().uri({ scheme: ["amqp", "amqps"] }).optional(),
+  }),
+  ERP_OUTBOX_POLL_MS: Joi.number().integer().min(500).max(60_000).default(5_000),
+  ERP_COMMAND_API_ENABLED: Joi.boolean().default(false),
+  ERP_SERVICE_KEY: Joi.when("ERP_COMMAND_API_ENABLED", {
+    is: true,
+    then: Joi.string().min(32).required(),
+    otherwise: Joi.string().optional(),
+  }),
+  // Comma-separated ERP branch codes the service key may touch. Required when
+  // the command API is on: an empty allowlist would silently reject everything.
+  ERP_ALLOWED_BRANCH_IDS: Joi.when("ERP_COMMAND_API_ENABLED", {
+    is: true,
+    then: Joi.string().min(1).required(),
+    otherwise: Joi.string().optional(),
+  }),
 }).unknown(true);
 
 let cached: BackendEnv | undefined;

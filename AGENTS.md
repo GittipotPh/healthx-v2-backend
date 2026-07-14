@@ -45,8 +45,14 @@ prisma/sql/002_create_queue_status_and_config.sql - queue_status + ref_queue_ste
 prisma/sql/003_extend_status_appointment_enum.sql - additive enum extension (values only, no table ALTER)
 ```
 
-App-owned tables (safe to evolve): `audit_log`, `queue_status`, `ref_queue_step_status`.
-All follow the string-reference rule below — no FK to legacy HealthX tables.
+App-owned tables (safe to evolve): `audit_log`, `queue_status`, `ref_queue_step_status`,
+plus the ERP boundary pair (Phase 4, `prisma/sql/010_*.sql`): `outbox_event`
+(transactional outbox — insert via `OutboxService.enqueue(tx, …)` inside the same
+`$transaction` as the business write; the dispatcher publishes to RabbitMQ) and
+`erp_inbound_command` (idempotent record of BC→HealthX commands applied through
+`POST /internal/erp/commands`, guarded by `x-service-key` + branch allowlist —
+see `src/integrations/`). All follow the string-reference rule below — no FK to
+legacy HealthX tables.
 
 In Prisma 7 the `url` is configured in `prisma.config.ts`, not the schema file.
 

@@ -57,4 +57,42 @@ describe("env", () => {
     });
     expect(env.CORS_ORIGINS).toBe("https://app.healthx-pro.com");
   });
+
+  it("requires RABBITMQ_URL when the outbox dispatcher is enabled", () => {
+    expect(() => validateEnv({ ...BASE_ENV, ERP_OUTBOX_ENABLED: "true" })).toThrow(
+      /RABBITMQ_URL/,
+    );
+
+    const env = validateEnv({
+      ...BASE_ENV,
+      ERP_OUTBOX_ENABLED: "true",
+      RABBITMQ_URL: "amqp://user:pass@localhost:5672",
+    });
+    expect(env.ERP_OUTBOX_ENABLED).toBe(true);
+    expect(env.ERP_OUTBOX_POLL_MS).toBe(5000);
+  });
+
+  it("requires the service key and branch allowlist when the command API is enabled", () => {
+    expect(() => validateEnv({ ...BASE_ENV, ERP_COMMAND_API_ENABLED: "true" })).toThrow(
+      /ERP_SERVICE_KEY/,
+    );
+    expect(() =>
+      validateEnv({
+        ...BASE_ENV,
+        ERP_COMMAND_API_ENABLED: "true",
+        ERP_SERVICE_KEY: "phase4-test-service-key-0123456789abcdef",
+      }),
+    ).toThrow(/ERP_ALLOWED_BRANCH_IDS/);
+
+    const env = validateEnv({
+      ...BASE_ENV,
+      ERP_COMMAND_API_ENABLED: "true",
+      ERP_SERVICE_KEY: "phase4-test-service-key-0123456789abcdef",
+      ERP_ALLOWED_BRANCH_IDS: "BR-001,BR-002",
+    });
+    expect(env.ERP_COMMAND_API_ENABLED).toBe(true);
+    // Both capabilities stay off by default — dev without a broker must boot.
+    expect(validateEnv(BASE_ENV).ERP_OUTBOX_ENABLED).toBe(false);
+    expect(validateEnv(BASE_ENV).ERP_COMMAND_API_ENABLED).toBe(false);
+  });
 });

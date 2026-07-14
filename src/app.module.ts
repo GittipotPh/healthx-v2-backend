@@ -11,6 +11,8 @@ import { AppointmentsModule } from "./api/appointments/appointments.module";
 import { OpdModule } from "./api/opd/opd.module";
 import { QueueModule } from "./api/queue/queue.module";
 import { HealthModule } from "./health/health.module";
+import { OutboxModule } from "./integrations/outbox/outbox.module";
+import { ErpCommandModule } from "./integrations/erp-command/erp-command.module";
 
 @Module({
   imports: [
@@ -47,6 +49,8 @@ import { HealthModule } from "./health/health.module";
     OpdModule,
     QueueModule,
     HealthModule,
+    OutboxModule,
+    ErpCommandModule,
   ],
 })
 export class AppModule {}

@@ -83,6 +83,7 @@
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
+    "@types/amqplib": "^0.10.8",
     "@types/compression": "^1.8.0",
     "@types/cookie-parser": "^1.4.0",
     "@types/jest": "^30.0.0",

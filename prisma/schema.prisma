@@ -2213,6 +2213,44 @@ model appointment_anesthetic {
   @@index([clinic_id, branch_id])
 }
 
+// App-owned transactional outbox (plan-latest §8 / rabbitmq plan §3): services
+// insert a row inside the same $transaction as the business write; the
+// dispatcher publishes PENDING rows to RabbitMQ with publisher confirms.
+// String refs to HealthX rows only — NO @relation/FK to legacy tables.
+model outbox_event {
+  id             String    @id @default(uuid()) @db.Uuid
+  event_type     String    @db.VarChar(100) // e.g. "erp.sales-order.created"
+  aggregate_type String    @db.VarChar(50) // e.g. "sale_order"
+  aggregate_id   String    @db.VarChar(50)
+  clinic_id      String    @db.VarChar(50)
+  branch_id      String?   @db.VarChar(50)
+  payload        Json
+  correlation_id String    @db.VarChar(64)
+  status         String    @default("PENDING") @db.VarChar(20) // PENDING | PUBLISHED | PARKED
+  attempts       Int       @default(0)
+  created_at     DateTime  @default(now()) @db.Timestamp(6)
+  published_at   DateTime? @db.Timestamp(6)
+
+  @@index([status, created_at])
+}
+
+// Idempotent record of BC->HealthX commands applied through the internal
+// x-service-key command API (plan-latest §4). command_id is the erp-integration
+// service's inbound idempotency key; the unique constraint makes replays no-ops.
+model erp_inbound_command {
+  erp_inbound_command_id String   @id @default(uuid()) @db.Uuid
+  operation              String   @db.VarChar(100)
+  command_id             String   @db.VarChar(200)
+  branch_id              String   @db.VarChar(50)
+  payload                Json
+  correlation_id         String?  @db.VarChar(100)
+  result                 String   @default("RECORDED") @db.VarChar(20)
+  received_at            DateTime @default(now()) @db.Timestamp(6)
+
+  @@unique([operation, command_id])
+  @@index([received_at])
+}
+
 enum auditReferenceType {
   QUEUE
   APPOINTMENT

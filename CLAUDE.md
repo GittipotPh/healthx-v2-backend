@@ -28,8 +28,12 @@ src/common/                   → ResponseInterceptor + AllExceptionsFilter, rat
 src/api/<feature>/            → audit-log, queue, customers, appointments, opd
 ```
 
-App-owned tables: `audit_log`, `queue_status`, `ref_queue_step_status` (string refs
-to HealthX rows, no FK). Write endpoints today: `POST clinic/queue/transition`,
+App-owned tables: `audit_log`, `queue_status`, `ref_queue_step_status`, and the
+Phase 4 ERP boundary pair `outbox_event` + `erp_inbound_command` (string refs
+to HealthX rows, no FK). ERP boundary code lives in `src/integrations/`
+(outbox enqueue/dispatcher + the x-service-key `POST /internal/erp/commands` API);
+both capabilities are env-gated off by default (`ERP_OUTBOX_ENABLED`,
+`ERP_COMMAND_API_ENABLED`). Write endpoints today: `POST clinic/queue/transition`,
 `POST clinic/appointments` (both transactional + audited), `POST clinic/audit-log/login`.
 There is deliberately NO generic audit-log create endpoint — audit rows are written
 server-side only, as workflow side effects with scope-derived actors.
