@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { ApiProperty } from "@nestjs/swagger";
 import { auditReferenceType, role_enum } from "@prisma/client";
+import { ErpSalesOrderEmitter } from "../../integrations/erp-events/erp-sales-order-emitter.service";
 import { PrismaService } from "../../prisma.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
 import { AuditLogView } from "../audit-log/audit-log.mapper";
@@ -69,6 +70,7 @@ export class QueueService {
     private readonly prisma: PrismaService,
     private readonly repository: QueueRepository,
     private readonly auditLogService: AuditLogService,
+    private readonly erpSalesOrderEmitter: ErpSalesOrderEmitter,
   ) {}
 
   async today(query: QueryQueueDto, scope: RequestScope): Promise<QueueTodayResult> {
@@ -102,6 +104,11 @@ export class QueueService {
     if (!appointment) {
       throw new NotFoundException("Appointment not found for this clinic/branch");
     }
+
+    // Set when the card lands on the visit's end step — that's the billing
+    // moment (payment prerequisites were just enforced), so the visit's PAID
+    // sale orders are exported to ERP in the same transaction.
+    let emitErpSalesOrders = false;
 
     // 1. Enforce queue config transition rules if step is changing
     if (dto.step) {
@@ -203,6 +210,7 @@ export class QueueService {
           }
         }
       } else if (targetColId === "completed" || columnSetting.isEndStep) {
+        emitErpSalesOrders = true;
         const rule = activeConfig.transitions.completed;
         if (rule.requiresPayment && appointment.opd_id) {
           const hasUnpaid = await this.repository.hasUnpaidPrescriptions(appointment.opd_id);
@@ -268,6 +276,13 @@ export class QueueService {
           dto.appointmentId,
           dto.step,
           tx,
+        );
+      }
+      if (emitErpSalesOrders && appointment.opd_id) {
+        await this.erpSalesOrderEmitter.emitPaidSaleOrdersForOpd(
+          tx,
+          { clinicId: scope.clinicId, branchId: scope.branchId },
+          appointment.opd_id,
         );
       }
       return this.auditLogService.create(

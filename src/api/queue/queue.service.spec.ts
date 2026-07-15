@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from "@nes
 import { auditReferenceType, role_enum, statusAppointment } from "@prisma/client";
 import { QueueService } from "./queue.service";
 import type { QueueRepository } from "./queue.repository";
+import type { ErpSalesOrderEmitter } from "../../integrations/erp-events/erp-sales-order-emitter.service";
 import type { AuditLogService } from "../audit-log/audit-log.service";
 import type { AuditLogView } from "../audit-log/audit-log.mapper";
 import type { PrismaService } from "../../prisma.service";
@@ -27,19 +28,24 @@ const AUDIT_VIEW = { id: 1, action: "move" } as unknown as AuditLogView;
 // Sentinel standing in for the Prisma.TransactionClient handed to the callback.
 const TX = { __tx: true };
 
-/** A persisted queue_config row as the repository would return it. */
+/**
+ * A persisted queue_config row as the repository would return it. Deep-cloned
+ * so tests that mutate their row can't pollute DEFAULT_QUEUE_CONFIG (which
+ * other tests reach via the no-config-row fallback).
+ */
 function makeQueueConfigRow(): Record<string, unknown> {
+  const config = JSON.parse(JSON.stringify(DEFAULT_QUEUE_CONFIG)) as typeof DEFAULT_QUEUE_CONFIG;
   return {
     queue_config_id: "cfg-1",
     clinic_id: SCOPE.clinicId,
     branch_id: SCOPE.branchId,
-    columns: DEFAULT_QUEUE_CONFIG.columns,
-    sla: DEFAULT_QUEUE_CONFIG.sla,
-    transitions: DEFAULT_QUEUE_CONFIG.transitions,
-    automation: DEFAULT_QUEUE_CONFIG.automation,
-    tracking: DEFAULT_QUEUE_CONFIG.tracking,
-    notifications: DEFAULT_QUEUE_CONFIG.notifications,
-    permissions: DEFAULT_QUEUE_CONFIG.permissions,
+    columns: config.columns,
+    sla: config.sla,
+    transitions: config.transitions,
+    automation: config.automation,
+    tracking: config.tracking,
+    notifications: config.notifications,
+    permissions: config.permissions,
     updated_by: "user-9",
     updated_at: new Date("2026-07-10T00:00:00Z"),
     created_at: new Date("2026-07-01T00:00:00Z"),
@@ -76,11 +82,16 @@ function makeService(options: { appointment?: object | null; queueConfig?: objec
     create: jest.fn().mockResolvedValue(AUDIT_VIEW),
   } as unknown as AuditLogService;
 
+  const erpSalesOrderEmitter = {
+    emitPaidSaleOrdersForOpd: jest.fn().mockResolvedValue(0),
+  } as unknown as ErpSalesOrderEmitter;
+
   return {
-    service: new QueueService(prisma, repository, auditLogService),
+    service: new QueueService(prisma, repository, auditLogService, erpSalesOrderEmitter),
     prisma,
     repository,
     auditLogService,
+    erpSalesOrderEmitter,
   };
 }
 
@@ -221,7 +232,7 @@ describe("QueueService.transition", () => {
       findQueueConfig: jest.fn().mockResolvedValue(configRow),
       findQueueStatus: jest.fn().mockResolvedValue({ current_step: "CONFIRMED" }),
     };
-    const customService = new QueueService(null as any, mockRepo as any, null as any);
+    const customService = new QueueService(null as any, mockRepo as any, null as any, null as any);
 
     await expect(
       customService.transition(dto({ step: "CONSULTING" }), SCOPE, PRINCIPAL), // skips arrived
@@ -239,11 +250,60 @@ describe("QueueService.transition", () => {
       findQueueConfig: jest.fn().mockResolvedValue(configRow),
       findQueueStatus: jest.fn().mockResolvedValue({ current_step: "VERIFIED" }),
     };
-    const customService = new QueueService(null as any, mockRepo as any, null as any);
+    const customService = new QueueService(null as any, mockRepo as any, null as any, null as any);
 
     await expect(
       customService.transition(dto({ step: "COMPLETED" }), SCOPE, PRINCIPAL),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it("emits the visit's ERP sales-order events inside the transaction on a COMPLETED move", async () => {
+    const { service, erpSalesOrderEmitter } = makeService({
+      appointment: { appointment_id: "appt-1", opd_id: "opd-1" },
+    });
+
+    await service.transition(dto({ step: "COMPLETED" }), SCOPE, PRINCIPAL);
+
+    expect(erpSalesOrderEmitter.emitPaidSaleOrdersForOpd).toHaveBeenCalledTimes(1);
+    expect(erpSalesOrderEmitter.emitPaidSaleOrdersForOpd).toHaveBeenCalledWith(
+      TX,
+      { clinicId: SCOPE.clinicId, branchId: SCOPE.branchId },
+      "opd-1",
+    );
+  });
+
+  it("does not emit ERP events on a non-end-step move", async () => {
+    const { service, erpSalesOrderEmitter } = makeService({
+      appointment: { appointment_id: "appt-1", opd_id: "opd-1" },
+    });
+
+    await service.transition(dto({ step: "ARRIVED" }), SCOPE, PRINCIPAL);
+
+    expect(erpSalesOrderEmitter.emitPaidSaleOrdersForOpd).not.toHaveBeenCalled();
+  });
+
+  it("does not emit ERP events when the completed visit has no OPD", async () => {
+    // requiresOPD/Course/Medicine off so a no-OPD completion is allowed at all.
+    // Replace (don't mutate) transitions: makeQueueConfigRow shares references
+    // with DEFAULT_QUEUE_CONFIG.
+    const configRow = makeQueueConfigRow();
+    configRow.transitions = {
+      ...(configRow.transitions as object),
+      completed: {
+        requiresPayment: false,
+        requiresOPD: false,
+        requiresCourse: false,
+        requiresMedicine: false,
+      },
+    };
+    const { service, erpSalesOrderEmitter } = makeService({
+      appointment: { appointment_id: "appt-1", opd_id: null },
+      queueConfig: configRow,
+    });
+
+    await service.transition(dto({ step: "COMPLETED" }), SCOPE, PRINCIPAL);
+
+    expect(erpSalesOrderEmitter.emitPaidSaleOrdersForOpd).not.toHaveBeenCalled();
   });
 });
 
