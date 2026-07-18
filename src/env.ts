@@ -34,6 +34,7 @@ export interface BackendEnv {
   ERP_COMMAND_API_ENABLED: boolean;
   ERP_SERVICE_KEY?: string;
   ERP_ALLOWED_BRANCH_IDS?: string;
+  OPD_V2_ENABLED: boolean;
 }
 
 const schema = Joi.object<BackendEnv>({
@@ -121,6 +122,9 @@ const schema = Joi.object<BackendEnv>({
     then: Joi.string().min(1).required(),
     otherwise: Joi.string().optional(),
   }),
+  // Deployment kill switch for the new OPD worklist/start/workspace slice.
+  // Existing legacy OPD list/history and shared Queue routes remain available.
+  OPD_V2_ENABLED: Joi.boolean().default(true),
 }).unknown(true);
 
 let cached: BackendEnv | undefined;

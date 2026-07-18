@@ -1,10 +1,19 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { ApiProperty } from "@nestjs/swagger";
 import { auditReferenceType } from "@prisma/client";
 import { AppointmentOptionsRepository } from "./appointment-options.repository";
-import { AppointmentsRepository } from "./appointments.repository";
+import {
+  AppointmentQueueTicketInvariantError,
+  AppointmentsRepository,
+} from "./appointments.repository";
 import {
   AppointmentView,
+  type AppointmentWithCustomer,
   type AppointmentOptionPage,
   type AppointmentOptionsView,
   type BranchScopedOption,
@@ -44,7 +53,10 @@ export class AppointmentsService {
     private readonly branchAccessService: BranchAccessService,
   ) {}
 
-  async list(query: QueryAppointmentsDto, scope: RequestScope): Promise<AppointmentListResult> {
+  async list(
+    query: QueryAppointmentsDto,
+    scope: RequestScope,
+  ): Promise<AppointmentListResult> {
     const result = await this.repository.findMany(query, scope);
     return {
       items: result.items.map(toAppointmentView),
@@ -54,14 +66,22 @@ export class AppointmentsService {
     };
   }
 
-  async create(dto: CreateAppointmentDto, scope: RequestScope): Promise<AppointmentView> {
+  async create(
+    dto: CreateAppointmentDto,
+    scope: RequestScope,
+  ): Promise<AppointmentView> {
     const targetScope = await this.resolveTargetScope(dto, scope);
 
     // Throws NotFoundException if the customer doesn't exist in this clinic.
     await this.customersService.detail(dto.customerId, targetScope.clinicId);
 
-    if (dto.opdId && !(await this.repository.opdExistsInScope(dto.opdId, targetScope))) {
-      throw new NotFoundException("OPD record not found for this clinic/branch");
+    if (
+      dto.opdId &&
+      !(await this.repository.opdExistsInScope(dto.opdId, targetScope))
+    ) {
+      throw new NotFoundException(
+        "OPD record not found for this clinic/branch",
+      );
     }
 
     const created = await this.repository.create(dto, targetScope);
@@ -120,15 +140,34 @@ export class AppointmentsService {
       dto.startTime,
     );
 
-    const updated = await this.repository.reschedule(
-      id,
-      {
-        dateAppointment: dto.dateAppointment,
-        startTime: dto.startTime,
-        endTime,
-      },
-      scope,
-    );
+    let updated: AppointmentWithCustomer;
+    try {
+      updated = await this.repository.reschedule(
+        id,
+        {
+          dateAppointment: dto.dateAppointment,
+          startTime: dto.startTime,
+          endTime,
+        },
+        scope,
+      );
+    } catch (error) {
+      if (error instanceof AppointmentQueueTicketInvariantError) {
+        const messages = {
+          MISSING_TICKET:
+            "Appointment queue ticket is missing; reconcile it before rescheduling",
+          ENCOUNTER_ALREADY_STARTED:
+            "Appointment cannot be rescheduled after its OPD encounter has started",
+          CONCURRENT_CHANGE:
+            "Appointment changed while it was being rescheduled; reload and try again",
+        } satisfies Record<
+          AppointmentQueueTicketInvariantError["reason"],
+          string
+        >;
+        throw new ConflictException(messages[error.reason]);
+      }
+      throw error;
+    }
 
     await this.auditLogService.record({
       clinicId: scope.clinicId,
@@ -155,19 +194,23 @@ export class AppointmentsService {
       const [newStartH, newStartM] = newStartTime.split(":").map(Number);
 
       if (
-        isNaN(origStartH) || isNaN(origStartM) ||
-        isNaN(origEndH) || isNaN(origEndM) ||
-        isNaN(newStartH) || isNaN(newStartM)
+        isNaN(origStartH) ||
+        isNaN(origStartM) ||
+        isNaN(origEndH) ||
+        isNaN(origEndM) ||
+        isNaN(newStartH) ||
+        isNaN(newStartM)
       ) {
         return this.add30Minutes(newStartTime);
       }
 
-      const durationMin = (origEndH * 60 + origEndM) - (origStartH * 60 + origStartM);
+      const durationMin =
+        origEndH * 60 + origEndM - (origStartH * 60 + origStartM);
       if (durationMin <= 0) {
         return this.add30Minutes(newStartTime);
       }
 
-      const newEndTotalMin = (newStartH * 60 + newStartM) + durationMin;
+      const newEndTotalMin = newStartH * 60 + newStartM + durationMin;
       const newEndH = Math.floor(newEndTotalMin / 60) % 24;
       const newEndM = newEndTotalMin % 60;
 
@@ -179,7 +222,7 @@ export class AppointmentsService {
 
   private add30Minutes(time: string): string {
     const [h, m] = time.split(":").map(Number);
-    const total = (h * 60 + m) + 30;
+    const total = h * 60 + m + 30;
     const newH = Math.floor(total / 60) % 24;
     const newM = total % 60;
     return `${String(newH).padStart(2, "0")}:${String(newM).padStart(2, "0")}`;
@@ -195,9 +238,12 @@ export class AppointmentsService {
       return scope;
     }
 
-    const branches = await this.branchAccessService.findAccessibleBranches(scope);
+    const branches =
+      await this.branchAccessService.findAccessibleBranches(scope);
     if (!branches.some((branch) => branch.branchId === requestedBranchId)) {
-      throw new BadRequestException("Selected branch is not available for this user");
+      throw new BadRequestException(
+        "Selected branch is not available for this user",
+      );
     }
 
     return {

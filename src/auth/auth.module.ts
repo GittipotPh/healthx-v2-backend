@@ -7,6 +7,7 @@ import { RefreshSessionService } from "./refresh-session.service";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { OriginGuard } from "./guards/origin.guard";
 import { ScopeGuard } from "./guards/scope.guard";
+import { PermissionsGuard } from "./guards/permissions.guard";
 import { RateLimitGuard } from "../common/rate-limit/rate-limit.guard";
 import { accessTtlSeconds } from "./auth.cookie";
 import { backendEnv } from "../env";
@@ -31,6 +32,7 @@ import { backendEnv } from "../env";
     { provide: APP_GUARD, useClass: OriginGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: ScopeGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
 export class AuthModule {}

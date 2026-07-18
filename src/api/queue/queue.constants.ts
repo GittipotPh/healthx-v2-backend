@@ -3,6 +3,11 @@ import { statusAppointment } from "@prisma/client";
 /** The step a newly created appointment's queue card starts on. */
 export const INITIAL_QUEUE_STEP = "CONFIRMED";
 
+export const TERMINAL_QUEUE_STEPS: ReadonlySet<string> = new Set([
+  "COMPLETED",
+  "CANCELLED",
+]);
+
 /**
  * 1:1 map from a `ref_queue_step_status.code` (queue_status.current_step) to
  * the legacy `statusAppointment` value it best-effort mirrors. Every step in
@@ -29,4 +34,6 @@ export function stepCodeToColumnId(code: string): string {
 }
 
 /** Kanban column ids: the seeded `ref_queue_step_status` catalog, lowercased/dashed. */
-export const QUEUE_STEP_COLUMNS = Object.keys(STEP_TO_APPOINTMENT_STATUS).map(stepCodeToColumnId);
+export const QUEUE_STEP_COLUMNS = Object.keys(STEP_TO_APPOINTMENT_STATUS).map(
+  stepCodeToColumnId,
+);

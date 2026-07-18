@@ -1,11 +1,17 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import { ApiProperty } from "@nestjs/swagger";
-import { auditReferenceType, role_enum } from "@prisma/client";
+import {
+  auditReferenceType,
+  role_enum,
+  statusAppointment,
+  type Prisma,
+} from "@prisma/client";
 import { ErpSalesOrderEmitter } from "../../integrations/erp-events/erp-sales-order-emitter.service";
 import { PrismaService } from "../../prisma.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
@@ -17,8 +23,14 @@ import {
   defaultQueueConfigView,
   toQueueConfigView,
   toQueueItemView,
+  toWalkInQueueItemView,
 } from "./queue.mapper";
-import { QUEUE_STEP_COLUMNS, STEP_TO_APPOINTMENT_STATUS, stepCodeToColumnId } from "./queue.constants";
+import {
+  QUEUE_STEP_COLUMNS,
+  STEP_TO_APPOINTMENT_STATUS,
+  TERMINAL_QUEUE_STEPS,
+  stepCodeToColumnId,
+} from "./queue.constants";
 import { DEFAULT_QUEUE_CONFIG } from "./queue-config.defaults";
 import type { QueryQueueDto } from "./dto/query-queue.dto";
 import type { TransitionQueueDto } from "./dto/transition-queue.dto";
@@ -31,6 +43,10 @@ import {
   QueueTransitionsSettingDto,
 } from "./dto/save-queue-config.dto";
 import type { Principal, RequestScope } from "../../auth/auth.types";
+import {
+  bangkokBusinessDate,
+  isIsoBusinessDate,
+} from "../../common/business-date";
 
 export class QueueTodayResult {
   @ApiProperty({ description: "The day shown (YYYY-MM-DD)" })
@@ -38,6 +54,19 @@ export class QueueTodayResult {
 
   @ApiProperty({ type: [QueueItemView] })
   items!: QueueItemView[];
+
+  @ApiProperty({
+    type: "object",
+    additionalProperties: true,
+    description:
+      "Counts from the same branch/day population returned by this worklist",
+  })
+  facets!: {
+    total: number;
+    appointments: number;
+    walkIns: number;
+    byStep: Record<string, number>;
+  };
 }
 
 export class QueueTransitionResult {
@@ -73,22 +102,310 @@ export class QueueService {
     private readonly erpSalesOrderEmitter: ErpSalesOrderEmitter,
   ) {}
 
-  async today(query: QueryQueueDto, scope: RequestScope): Promise<QueueTodayResult> {
-    const date = query.date ?? new Date().toISOString().slice(0, 10);
-    const rows = await this.repository.findTodayQueue(scope.clinicId, scope.branchId, date);
+  async today(
+    query: QueryQueueDto,
+    scope: RequestScope,
+  ): Promise<QueueTodayResult> {
+    const date = query.date ?? bangkokBusinessDate();
+    if (!isIsoBusinessDate(date)) {
+      throw new BadRequestException(
+        "date must be a valid YYYY-MM-DD calendar date",
+      );
+    }
+    const [rows, walkIns] = await Promise.all([
+      this.repository.findTodayQueue(scope.clinicId, scope.branchId, date),
+      this.repository.findWalkInQueue(scope.clinicId, scope.branchId, date),
+    ]);
     const customerIds = Array.from(new Set(rows.map((row) => row.customer_id)));
     const appointmentIds = rows.map((row) => row.appointment_id);
-    const [histories, steps] = await Promise.all([
+    const [histories, legacyQueueStatuses, v2Identities] = await Promise.all([
       this.repository.findCustomersHistories(scope.clinicId, customerIds),
-      this.repository.findQueueStatusesByAppointmentIds(appointmentIds),
+      this.repository.findQueueStatusesByAppointmentIds(
+        scope.clinicId,
+        scope.branchId,
+        appointmentIds,
+      ),
+      this.repository.findV2QueueIdentitiesByAppointmentIds(
+        scope.clinicId,
+        scope.branchId,
+        appointmentIds,
+      ),
     ]);
+    const now = new Date();
+    const appointmentItems = rows.map((row, index) => {
+      const history = histories[row.customer_id];
+      const legacy = legacyQueueStatuses[row.appointment_id];
+      const v2 = v2Identities[row.appointment_id];
+      return toQueueItemView(
+        row,
+        index,
+        history,
+        {
+          legacyQueueStatusId:
+            v2?.legacyQueueStatusId ?? legacy?.queueStatusId ?? null,
+          currentStep: v2?.currentStep ?? legacy?.currentStep ?? null,
+          queueTicketId: v2?.queueTicketId ?? null,
+          encounterId: v2?.encounterId ?? null,
+          displayNumber: v2?.displayNumber ?? null,
+          enteredAt: v2?.enteredAt ?? legacy?.enteredAt ?? null,
+        },
+        now,
+      );
+    });
+    const walkInItems = walkIns.map((row) => toWalkInQueueItemView(row, now));
+    const items = [...appointmentItems, ...walkInItems].sort((left, right) =>
+      left.time.localeCompare(right.time),
+    );
+    const byStep: Record<string, number> = {};
+    for (const item of items) {
+      const step = item.step ?? "unassigned";
+      byStep[step] = (byStep[step] ?? 0) + 1;
+    }
     return {
       date,
-      items: rows.map((row, index) => {
-        const history = histories[row.customer_id];
-        return toQueueItemView(row, index, history, steps[row.appointment_id] ?? null);
-      }),
+      items,
+      facets: {
+        total: items.length,
+        appointments: appointmentItems.length,
+        walkIns: walkInItems.length,
+        byStep,
+      },
     };
+  }
+
+  /**
+   * Moves a newly-created OPD encounter into service without opening a nested
+   * transaction. OPD start owns the outer transaction; this queue-domain
+   * command validates branch configuration and writes both compatibility and
+   * V2 queue state/history using that same client.
+   */
+  async startEncounter(
+    input: {
+      queueTicketId: string;
+      encounterId: string;
+      appointmentId: string | null;
+      legacyOpdId: string;
+    },
+    scope: RequestScope,
+    principal: Principal,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
+    const targetStep = "IN_SERVICE";
+    const targetColumnId = stepCodeToColumnId(targetStep);
+    const ticket = await this.repository.findV2QueueTicketById(
+      scope.clinicId,
+      scope.branchId,
+      input.queueTicketId,
+      tx,
+    );
+    if (!ticket) {
+      throw new NotFoundException(
+        "Queue ticket not found for this clinic/branch",
+      );
+    }
+    if (
+      ticket.appointment_id !== input.appointmentId ||
+      ticket.customer_id.length === 0
+    ) {
+      throw new ConflictException(
+        "Queue ticket identity does not match the OPD encounter",
+      );
+    }
+    if (ticket.cancelled_at || TERMINAL_QUEUE_STEPS.has(ticket.current_step)) {
+      throw new ConflictException(
+        `A terminal queue ticket (${ticket.current_step}) cannot start an OPD encounter`,
+      );
+    }
+
+    const configRow = await this.repository.findQueueConfig(
+      scope.clinicId,
+      scope.branchId,
+      tx,
+    );
+    const activeConfig = configRow
+      ? {
+          columns: configRow.columns as unknown as QueueColumnSettingDto[],
+          transitions:
+            configRow.transitions as unknown as QueueTransitionsSettingDto,
+          permissions: configRow.permissions as unknown as Record<
+            string,
+            string[]
+          >,
+        }
+      : DEFAULT_QUEUE_CONFIG;
+    const targetColumn = activeConfig.columns.find(
+      (column) => column.id === targetColumnId,
+    );
+    if (!targetColumn?.enabled) {
+      throw new BadRequestException(
+        "The In-Service queue step is disabled for this branch",
+      );
+    }
+    if (!scope.isClinicRootUser) {
+      const allowedRoles = activeConfig.permissions[targetColumnId] ?? [];
+      const allowed = scope.roles.some((role) => {
+        if (allowedRoles.includes(role)) return true;
+        if (role === role_enum.CLINIC_OWNER || role === role_enum.MANAGER) {
+          return allowedRoles.some((value) =>
+            ["ADMIN", "CLINIC_OWNER", "MANAGER"].includes(value),
+          );
+        }
+        return (
+          (role === role_enum.ACCOUNTANT || role === role_enum.SALE) &&
+          allowedRoles.includes("CASHIER")
+        );
+      });
+      if (!allowed) {
+        throw new ForbiddenException(
+          "Your role cannot start treatment in this queue",
+        );
+      }
+    }
+
+    const activeColumns = activeConfig.columns
+      .filter((column) => column.enabled)
+      .sort((left, right) => left.order - right.order);
+    const currentColumnId = stepCodeToColumnId(ticket.current_step);
+    const currentIndex = activeColumns.findIndex(
+      (column) => column.id === currentColumnId,
+    );
+    const targetIndex = activeColumns.findIndex(
+      (column) => column.id === targetColumnId,
+    );
+    if (currentIndex < 0) {
+      throw new ConflictException(
+        `Queue ticket step "${ticket.current_step}" is not active in this branch`,
+      );
+    }
+    if (currentIndex > targetIndex) {
+      throw new ConflictException(
+        `Queue ticket is already beyond the In-Service step (${ticket.current_step})`,
+      );
+    }
+    if (currentIndex >= 0 && targetIndex > currentIndex + 1) {
+      const blockedSkip = activeColumns
+        .slice(currentIndex + 1, targetIndex)
+        .find((column) => column.isRequired && !column.canSkip);
+      if (blockedSkip) {
+        throw new BadRequestException(
+          `Cannot start treatment before required queue step "${blockedSkip.label}"`,
+        );
+      }
+    }
+
+    const rule = activeConfig.transitions["in-service"];
+    if (rule.requiresPayment) {
+      const hasUnpaid = await this.repository.hasUnpaidPrescriptions(
+        input.legacyOpdId,
+        tx,
+      );
+      if (hasUnpaid) {
+        throw new BadRequestException(
+          "Cannot start treatment while OPD items remain unpaid",
+        );
+      }
+    }
+    if (rule.requiresAnesthetic) {
+      if (
+        !input.appointmentId ||
+        !(await this.repository.hasAnesthetic(
+          scope.clinicId,
+          scope.branchId,
+          input.appointmentId,
+          tx,
+        ))
+      ) {
+        throw new BadRequestException(
+          "Anesthetic must be recorded before starting treatment",
+        );
+      }
+    }
+    if (rule.requiresDoctor) {
+      if (
+        !input.appointmentId ||
+        !(await this.repository.hasAssignedDoctor(
+          input.appointmentId,
+          scope.branchId,
+          tx,
+        ))
+      ) {
+        throw new BadRequestException(
+          "A doctor must be assigned before starting treatment",
+        );
+      }
+    }
+
+    if (input.appointmentId) {
+      const appointment = await this.repository.findAppointment(
+        scope.clinicId,
+        scope.branchId,
+        input.appointmentId,
+        tx,
+      );
+      if (!appointment || appointment.opd_id !== input.legacyOpdId) {
+        throw new ConflictException(
+          "Appointment OPD link changed while starting treatment",
+        );
+      }
+      await this.repository.updateAppointmentStatus(
+        scope.clinicId,
+        scope.branchId,
+        input.appointmentId,
+        statusAppointment.IN_SERVICE,
+        tx,
+      );
+      await this.repository.upsertQueueStep(
+        scope.clinicId,
+        scope.branchId,
+        input.appointmentId,
+        targetStep,
+        tx,
+      );
+    }
+
+    const outcome = await this.repository.transitionV2QueueTicket(
+      {
+        clinicId: scope.clinicId,
+        branchId: scope.branchId,
+        appointmentId: input.appointmentId,
+        queueTicketId: input.queueTicketId,
+        toStep: targetStep,
+        actorUserId: scope.userId,
+        reason: "OPD encounter started",
+      },
+      tx,
+    );
+    if (outcome === "CONFLICT") {
+      throw new ConflictException(
+        "Queue ticket changed concurrently; reload the worklist before retrying",
+      );
+    }
+    if (outcome === "UPDATED") {
+      await this.auditLogService.create(
+        {
+          clinicId: scope.clinicId,
+          branchId: scope.branchId,
+          referenceType: auditReferenceType.QUEUE,
+          referenceId: input.queueTicketId,
+          action: "start-treatment",
+          actionLabel: "Start treatment",
+          fromStatus: ticket.current_step,
+          toStatus: targetStep,
+          actorUserId: scope.userId,
+          actorName: principal.name,
+          actorRole:
+            scope.roles[0] ??
+            (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined),
+          metadata: {
+            encounterId: input.encounterId,
+            appointmentId: input.appointmentId,
+            expectedVersion: ticket.version,
+            resultVersion: ticket.version + 1,
+          },
+        },
+        tx,
+      );
+    }
   }
 
   async transition(
@@ -102,7 +419,9 @@ export class QueueService {
       dto.appointmentId,
     );
     if (!appointment) {
-      throw new NotFoundException("Appointment not found for this clinic/branch");
+      throw new NotFoundException(
+        "Appointment not found for this clinic/branch",
+      );
     }
 
     // Set when the card lands on the visit's end step — that's the billing
@@ -112,17 +431,26 @@ export class QueueService {
 
     // 1. Enforce queue config transition rules if step is changing
     if (dto.step) {
-      const configRow = await this.repository.findQueueConfig(scope.clinicId, scope.branchId);
+      const configRow = await this.repository.findQueueConfig(
+        scope.clinicId,
+        scope.branchId,
+      );
       const activeConfig = configRow
         ? {
             columns: configRow.columns as unknown as QueueColumnSettingDto[],
-            transitions: configRow.transitions as unknown as QueueTransitionsSettingDto,
-            permissions: configRow.permissions as unknown as Record<string, string[]>,
+            transitions:
+              configRow.transitions as unknown as QueueTransitionsSettingDto,
+            permissions: configRow.permissions as unknown as Record<
+              string,
+              string[]
+            >,
           }
         : DEFAULT_QUEUE_CONFIG;
 
       const targetColId = stepCodeToColumnId(dto.step);
-      const columnSetting = activeConfig.columns.find((c) => c.id === targetColId);
+      const columnSetting = activeConfig.columns.find(
+        (c) => c.id === targetColId,
+      );
 
       // A. Target Step Enabled Check
       if (!columnSetting || !columnSetting.enabled) {
@@ -159,9 +487,15 @@ export class QueueService {
       }
 
       // C. Skipped Columns Check
-      const currentQueueStatus = await this.repository.findQueueStatus(dto.appointmentId);
+      const currentQueueStatus = await this.repository.findQueueStatus(
+        scope.clinicId,
+        scope.branchId,
+        dto.appointmentId,
+      );
       const currentStepCode = currentQueueStatus?.current_step;
-      const currentColId = currentStepCode ? stepCodeToColumnId(currentStepCode) : null;
+      const currentColId = currentStepCode
+        ? stepCodeToColumnId(currentStepCode)
+        : null;
 
       if (currentColId) {
         const activeCols = activeConfig.columns
@@ -170,7 +504,11 @@ export class QueueService {
         const currentIdx = activeCols.findIndex((c) => c.id === currentColId);
         const targetIdx = activeCols.findIndex((c) => c.id === targetColId);
 
-        if (currentIdx !== -1 && targetIdx !== -1 && targetIdx > currentIdx + 1) {
+        if (
+          currentIdx !== -1 &&
+          targetIdx !== -1 &&
+          targetIdx > currentIdx + 1
+        ) {
           const skippedCols = activeCols.slice(currentIdx + 1, targetIdx);
           for (const col of skippedCols) {
             if (col.isRequired && !col.canSkip) {
@@ -186,7 +524,9 @@ export class QueueService {
       if (targetColId === "in-service") {
         const rule = activeConfig.transitions["in-service"];
         if (rule.requiresPayment && appointment.opd_id) {
-          const hasUnpaid = await this.repository.hasUnpaidPrescriptions(appointment.opd_id);
+          const hasUnpaid = await this.repository.hasUnpaidPrescriptions(
+            appointment.opd_id,
+          );
           if (hasUnpaid) {
             throw new BadRequestException(
               "Cannot transition to In-Service: Unpaid items exist. Please process payment first.",
@@ -194,7 +534,11 @@ export class QueueService {
           }
         }
         if (rule.requiresAnesthetic) {
-          const hasAnaesthetic = await this.repository.hasAnesthetic(dto.appointmentId);
+          const hasAnaesthetic = await this.repository.hasAnesthetic(
+            scope.clinicId,
+            scope.branchId,
+            dto.appointmentId,
+          );
           if (!hasAnaesthetic) {
             throw new BadRequestException(
               "Cannot transition to In-Service: Anesthetic must be applied first.",
@@ -202,7 +546,10 @@ export class QueueService {
           }
         }
         if (rule.requiresDoctor) {
-          const hasDoctor = await this.repository.hasAssignedDoctor(dto.appointmentId, scope.branchId);
+          const hasDoctor = await this.repository.hasAssignedDoctor(
+            dto.appointmentId,
+            scope.branchId,
+          );
           if (!hasDoctor) {
             throw new BadRequestException(
               "Cannot transition to In-Service: A doctor must be assigned first.",
@@ -213,7 +560,9 @@ export class QueueService {
         emitErpSalesOrders = true;
         const rule = activeConfig.transitions.completed;
         if (rule.requiresPayment && appointment.opd_id) {
-          const hasUnpaid = await this.repository.hasUnpaidPrescriptions(appointment.opd_id);
+          const hasUnpaid = await this.repository.hasUnpaidPrescriptions(
+            appointment.opd_id,
+          );
           if (hasUnpaid) {
             throw new BadRequestException(
               "Cannot transition to Completed: Unpaid items exist. Please process payment first.",
@@ -227,7 +576,9 @@ export class QueueService {
         }
         if (rule.requiresCourse) {
           if (appointment.opd_id) {
-            const hasCourse = await this.repository.hasUsedCourse(appointment.opd_id);
+            const hasCourse = await this.repository.hasUsedCourse(
+              appointment.opd_id,
+            );
             if (!hasCourse) {
               throw new BadRequestException(
                 "Cannot transition to Completed: A course or service usage must be logged first.",
@@ -241,7 +592,9 @@ export class QueueService {
         }
         if (rule.requiresMedicine) {
           if (appointment.opd_id) {
-            const hasPresc = await this.repository.hasPrescriptions(appointment.opd_id);
+            const hasPresc = await this.repository.hasPrescriptions(
+              appointment.opd_id,
+            );
             if (!hasPresc) {
               throw new BadRequestException(
                 "Cannot transition to Completed: Medicine prescriptions must be created first.",
@@ -259,15 +612,23 @@ export class QueueService {
     // A step move best-effort syncs the legacy status_appointment via the
     // step->status map, unless the caller explicitly overrides it.
     const appointmentStatus =
-      dto.appointmentStatus ?? (dto.step ? STEP_TO_APPOINTMENT_STATUS[dto.step] : undefined);
+      dto.appointmentStatus ??
+      (dto.step ? STEP_TO_APPOINTMENT_STATUS[dto.step] : undefined);
 
     const actorUserId = scope.userId;
     const actorName = principal.name;
-    const actorRole = scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
+    const actorRole =
+      scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
 
     const audit = await this.prisma.$transaction(async (tx) => {
       if (appointmentStatus) {
-        await this.repository.updateAppointmentStatus(dto.appointmentId, appointmentStatus, tx);
+        await this.repository.updateAppointmentStatus(
+          scope.clinicId,
+          scope.branchId,
+          dto.appointmentId,
+          appointmentStatus,
+          tx,
+        );
       }
       if (dto.step) {
         await this.repository.upsertQueueStep(
@@ -277,6 +638,22 @@ export class QueueService {
           dto.step,
           tx,
         );
+        const v2Transition = await this.repository.transitionV2QueueTicket(
+          {
+            clinicId: scope.clinicId,
+            branchId: scope.branchId,
+            appointmentId: dto.appointmentId,
+            toStep: dto.step,
+            actorUserId: scope.userId,
+            reason: dto.reason ?? null,
+          },
+          tx,
+        );
+        if (v2Transition === "CONFLICT") {
+          throw new ConflictException(
+            "Queue ticket changed concurrently; reload the worklist before retrying",
+          );
+        }
       }
       if (emitErpSalesOrders && appointment.opd_id) {
         await this.erpSalesOrderEmitter.emitPaidSaleOrdersForOpd(
@@ -330,25 +707,51 @@ export class QueueService {
       dto.appointmentId,
     );
     if (!appointment) {
-      throw new NotFoundException("Appointment not found for this clinic/branch");
+      throw new NotFoundException(
+        "Appointment not found for this clinic/branch",
+      );
     }
 
     const step = "CONSULTING";
     const appointmentStatus = STEP_TO_APPOINTMENT_STATUS[step];
-    const actorRole = scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
+    const actorRole =
+      scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
 
     const audit = await this.prisma.$transaction(async (tx) => {
+      await this.assertSpecialCommandTargetAllowed(
+        dto.appointmentId,
+        step,
+        scope,
+        tx,
+      );
       await this.repository.upsertConsultation(
-        { clinicId: scope.clinicId, branchId: scope.branchId, userId: scope.userId },
+        {
+          clinicId: scope.clinicId,
+          branchId: scope.branchId,
+          userId: scope.userId,
+        },
         dto,
         tx,
       );
-      await this.repository.updateAppointmentStatus(dto.appointmentId, appointmentStatus, tx);
+      await this.repository.updateAppointmentStatus(
+        scope.clinicId,
+        scope.branchId,
+        dto.appointmentId,
+        appointmentStatus,
+        tx,
+      );
       await this.repository.upsertQueueStep(
         scope.clinicId,
         scope.branchId,
         dto.appointmentId,
         step,
+        tx,
+      );
+      await this.syncV2AppointmentStep(
+        dto.appointmentId,
+        step,
+        "Consultation recorded",
+        scope,
         tx,
       );
       return this.auditLogService.create(
@@ -393,7 +796,9 @@ export class QueueService {
   ): Promise<QueueAnestheticResult> {
     // Cross-field rule the DTO can't express: a recorded allergy needs detail.
     if (dto.allergyStatus === "has" && !dto.allergyNotes?.trim()) {
-      throw new BadRequestException("allergyNotes is required when allergyStatus is 'has'");
+      throw new BadRequestException(
+        "allergyNotes is required when allergyStatus is 'has'",
+      );
     }
 
     const appointment = await this.repository.findAppointment(
@@ -402,25 +807,51 @@ export class QueueService {
       dto.appointmentId,
     );
     if (!appointment) {
-      throw new NotFoundException("Appointment not found for this clinic/branch");
+      throw new NotFoundException(
+        "Appointment not found for this clinic/branch",
+      );
     }
 
     const step = "ANESTHETIC";
     const appointmentStatus = STEP_TO_APPOINTMENT_STATUS[step];
-    const actorRole = scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
+    const actorRole =
+      scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
 
     const audit = await this.prisma.$transaction(async (tx) => {
+      await this.assertSpecialCommandTargetAllowed(
+        dto.appointmentId,
+        step,
+        scope,
+        tx,
+      );
       await this.repository.upsertAnesthetic(
-        { clinicId: scope.clinicId, branchId: scope.branchId, userId: scope.userId },
+        {
+          clinicId: scope.clinicId,
+          branchId: scope.branchId,
+          userId: scope.userId,
+        },
         dto,
         tx,
       );
-      await this.repository.updateAppointmentStatus(dto.appointmentId, appointmentStatus, tx);
+      await this.repository.updateAppointmentStatus(
+        scope.clinicId,
+        scope.branchId,
+        dto.appointmentId,
+        appointmentStatus,
+        tx,
+      );
       await this.repository.upsertQueueStep(
         scope.clinicId,
         scope.branchId,
         dto.appointmentId,
         step,
+        tx,
+      );
+      await this.syncV2AppointmentStep(
+        dto.appointmentId,
+        step,
+        "Anesthetic recorded",
+        scope,
         tx,
       );
       return this.auditLogService.create(
@@ -458,11 +889,124 @@ export class QueueService {
    * explicit save (a GET that writes would race on concurrent first reads).
    */
   async getQueueConfig(scope: RequestScope): Promise<QueueConfigView> {
-    const config = await this.repository.findQueueConfig(scope.clinicId, scope.branchId);
+    const config = await this.repository.findQueueConfig(
+      scope.clinicId,
+      scope.branchId,
+    );
     if (config) {
       return toQueueConfigView(config);
     }
-    return defaultQueueConfigView(scope.clinicId, scope.branchId, DEFAULT_QUEUE_CONFIG);
+    return defaultQueueConfigView(
+      scope.clinicId,
+      scope.branchId,
+      DEFAULT_QUEUE_CONFIG,
+    );
+  }
+
+  private async syncV2AppointmentStep(
+    appointmentId: string,
+    step: string,
+    reason: string,
+    scope: RequestScope,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
+    const outcome = await this.repository.transitionV2QueueTicket(
+      {
+        clinicId: scope.clinicId,
+        branchId: scope.branchId,
+        appointmentId,
+        toStep: step,
+        actorUserId: scope.userId,
+        reason,
+      },
+      tx,
+    );
+    if (outcome === "CONFLICT") {
+      throw new ConflictException(
+        "Queue ticket changed concurrently; reload the worklist before retrying",
+      );
+    }
+  }
+
+  private async assertSpecialCommandTargetAllowed(
+    appointmentId: string,
+    step: string,
+    scope: RequestScope,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
+    const configRow = await this.repository.findQueueConfig(
+      scope.clinicId,
+      scope.branchId,
+      tx,
+    );
+    const activeConfig = configRow
+      ? {
+          columns: configRow.columns as unknown as QueueColumnSettingDto[],
+          permissions: configRow.permissions as unknown as Record<
+            string,
+            string[]
+          >,
+        }
+      : DEFAULT_QUEUE_CONFIG;
+    const targetColumnId = stepCodeToColumnId(step);
+    const targetColumn = activeConfig.columns.find(
+      (column) => column.id === targetColumnId,
+    );
+    if (!targetColumn?.enabled) {
+      throw new BadRequestException(
+        `Target column "${targetColumnId}" is not enabled in this branch's configuration.`,
+      );
+    }
+
+    if (!scope.isClinicRootUser) {
+      const allowedRoles = activeConfig.permissions[targetColumnId] ?? [];
+      const allowed = scope.roles.some((role) => {
+        if (allowedRoles.includes(role)) return true;
+        if (role === role_enum.CLINIC_OWNER || role === role_enum.MANAGER) {
+          return allowedRoles.some((value) =>
+            ["ADMIN", "CLINIC_OWNER", "MANAGER"].includes(value),
+          );
+        }
+        return (
+          (role === role_enum.ACCOUNTANT || role === role_enum.SALE) &&
+          allowedRoles.includes("CASHIER")
+        );
+      });
+      if (!allowed) {
+        throw new ForbiddenException(
+          `Your role is not authorized to transition cards into "${targetColumn.label}".`,
+        );
+      }
+    }
+
+    const currentQueueStatus = await this.repository.findQueueStatus(
+      scope.clinicId,
+      scope.branchId,
+      appointmentId,
+      tx,
+    );
+    if (!currentQueueStatus) return;
+
+    const activeColumns = activeConfig.columns
+      .filter((column) => column.enabled)
+      .sort((left, right) => left.order - right.order);
+    const currentColumnId = stepCodeToColumnId(currentQueueStatus.current_step);
+    const currentIndex = activeColumns.findIndex(
+      (column) => column.id === currentColumnId,
+    );
+    const targetIndex = activeColumns.findIndex(
+      (column) => column.id === targetColumnId,
+    );
+    if (currentIndex < 0 || targetIndex <= currentIndex + 1) return;
+
+    const blockedSkip = activeColumns
+      .slice(currentIndex + 1, targetIndex)
+      .find((column) => column.isRequired && !column.canSkip);
+    if (blockedSkip) {
+      throw new BadRequestException(
+        `Cannot skip required column "${blockedSkip.label}". Cards must pass through it.`,
+      );
+    }
   }
 
   /**
@@ -476,8 +1020,15 @@ export class QueueService {
     scope: RequestScope,
     principal: Principal,
   ): Promise<QueueConfigView> {
-    const allowedRoles: role_enum[] = [role_enum.ADMIN, role_enum.CLINIC_OWNER, role_enum.MANAGER];
-    if (!scope.isClinicRootUser && !scope.roles.some((r) => allowedRoles.includes(r))) {
+    const allowedRoles: role_enum[] = [
+      role_enum.ADMIN,
+      role_enum.CLINIC_OWNER,
+      role_enum.MANAGER,
+    ];
+    if (
+      !scope.isClinicRootUser &&
+      !scope.roles.some((r) => allowedRoles.includes(r))
+    ) {
       throw new ForbiddenException(
         "Only clinic root users, ADMIN, CLINIC_OWNER, or MANAGER can update queue config",
       );
@@ -500,8 +1051,11 @@ export class QueueService {
       }
     }
 
-    const actorRole = scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
-    const enabledColumns = dto.columns.filter((c) => c.enabled).map((c) => c.id);
+    const actorRole =
+      scope.roles[0] ?? (scope.isClinicRootUser ? "CLINIC_ROOT" : undefined);
+    const enabledColumns = dto.columns
+      .filter((c) => c.enabled)
+      .map((c) => c.id);
 
     const saved = await this.prisma.$transaction(async (tx) => {
       const row = await this.repository.upsertQueueConfig(
@@ -546,10 +1100,14 @@ export class QueueService {
     const slaColumnIds = new Set<string>();
     for (const sla of dto.sla) {
       if (!columnIdSet.has(sla.columnId)) {
-        throw new BadRequestException(`sla references unknown column "${sla.columnId}"`);
+        throw new BadRequestException(
+          `sla references unknown column "${sla.columnId}"`,
+        );
       }
       if (slaColumnIds.has(sla.columnId)) {
-        throw new BadRequestException(`sla contains duplicate entries for "${sla.columnId}"`);
+        throw new BadRequestException(
+          `sla contains duplicate entries for "${sla.columnId}"`,
+        );
       }
       slaColumnIds.add(sla.columnId);
       // 0 means "off", so the ordering rule only applies when critical is set.
@@ -560,23 +1118,33 @@ export class QueueService {
       }
     }
 
-    const enabledIds = new Set(dto.columns.filter((c) => c.enabled).map((c) => c.id));
+    const enabledIds = new Set(
+      dto.columns.filter((c) => c.enabled).map((c) => c.id),
+    );
     if (!enabledIds.has(dto.automation.defaultColumn)) {
-      throw new BadRequestException("automation.defaultColumn must be an enabled column");
+      throw new BadRequestException(
+        "automation.defaultColumn must be an enabled column",
+      );
     }
 
     // permissions is a plain record on the DTO, so its values need runtime checks.
     const knownRoles = QUEUE_PERMISSION_ROLES as readonly string[];
     for (const [columnId, roles] of Object.entries(dto.permissions)) {
       if (!QUEUE_STEP_COLUMNS.includes(columnId)) {
-        throw new BadRequestException(`permissions references unknown column "${columnId}"`);
+        throw new BadRequestException(
+          `permissions references unknown column "${columnId}"`,
+        );
       }
       if (!Array.isArray(roles)) {
-        throw new BadRequestException(`permissions for "${columnId}" must be an array of roles`);
+        throw new BadRequestException(
+          `permissions for "${columnId}" must be an array of roles`,
+        );
       }
       for (const role of roles) {
         if (typeof role !== "string" || !knownRoles.includes(role)) {
-          throw new BadRequestException(`permissions for "${columnId}" contain unknown role`);
+          throw new BadRequestException(
+            `permissions for "${columnId}" contain unknown role`,
+          );
         }
       }
     }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { operator_type, statusAppointment, type Prisma } from "@prisma/client";
+import { operator_type, Prisma, statusAppointment } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import { INITIAL_QUEUE_STEP } from "../queue/queue.constants";
 import type { AppointmentWithCustomer } from "./appointments.mapper";
@@ -13,6 +13,23 @@ export interface PaginatedAppointments {
   total: number;
   page: number;
   pageSize: number;
+}
+
+interface LockedAppointmentQueueTicket {
+  queue_ticket_id: string;
+  business_date: string;
+}
+
+export class AppointmentQueueTicketInvariantError extends Error {
+  constructor(
+    public readonly reason:
+      | "MISSING_TICKET"
+      | "ENCOUNTER_ALREADY_STARTED"
+      | "CONCURRENT_CHANGE",
+  ) {
+    super(reason);
+    this.name = AppointmentQueueTicketInvariantError.name;
+  }
 }
 
 @Injectable()
@@ -48,7 +65,10 @@ export class AppointmentsRepository {
    * legacy default) and is kept independently: the Kanban step transitions
    * update it via STEP_TO_APPOINTMENT_STATUS as the card moves columns.
    */
-  async create(dto: CreateAppointmentDto, scope: RequestScope): Promise<AppointmentWithCustomer> {
+  async create(
+    dto: CreateAppointmentDto,
+    scope: RequestScope,
+  ): Promise<AppointmentWithCustomer> {
     const appointmentId = randomUUID();
     const now = new Date();
 
@@ -77,7 +97,7 @@ export class AppointmentsRepository {
         include: { customer: true },
       });
 
-      await tx.queue_status.create({
+      const queueStatus = await tx.queue_status.create({
         data: {
           clinic_id: scope.clinicId,
           branch_id: scope.branchId,
@@ -85,6 +105,33 @@ export class AppointmentsRepository {
           current_step: INITIAL_QUEUE_STEP,
           entered_at: now,
           updated_at: now,
+        },
+        select: {
+          queue_status_id: true,
+          current_step: true,
+          entered_at: true,
+        },
+      });
+
+      const queueSequence = await this.allocateQueueNumber(
+        dto.dateAppointment,
+        scope,
+        tx,
+      );
+      await tx.opd_queue_ticket.create({
+        data: {
+          clinic_id: scope.clinicId,
+          branch_id: scope.branchId,
+          customer_id: dto.customerId,
+          appointment_id: appointmentId,
+          legacy_queue_status_id: queueStatus.queue_status_id,
+          source_type: "APPOINTMENT",
+          business_date: this.toDateOnly(dto.dateAppointment),
+          current_step: queueStatus.current_step,
+          entered_at: queueStatus.entered_at,
+          queue_sequence: queueSequence,
+          display_number: this.queueDisplayNumber(queueSequence),
+          created_by: scope.userId,
         },
       });
 
@@ -133,7 +180,10 @@ export class AppointmentsRepository {
     return found !== null;
   }
 
-  async findOne(id: string, scope: RequestScope): Promise<AppointmentWithCustomer | null> {
+  async findOne(
+    id: string,
+    scope: RequestScope,
+  ): Promise<AppointmentWithCustomer | null> {
     const found = await this.prisma.appointment.findFirst({
       where: {
         appointment_id: id,
@@ -152,25 +202,109 @@ export class AppointmentsRepository {
     scope: RequestScope,
   ): Promise<AppointmentWithCustomer> {
     const now = new Date();
-    const updated = await this.prisma.appointment.update({
-      where: {
-        appointment_id: id,
-      },
-      data: {
-        date_appointment: data.dateAppointment,
-        start_time: data.startTime,
-        time_arrive: data.startTime,
-        end_time: data.endTime,
-        updated_at: now,
-      },
-      include: { customer: true },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // Lock the app-owned ticket before checking for an encounter. An OPD start
+      // inserting the strong ticket identity FK must then serialize with this
+      // reschedule, so a visit date can never be cascaded after clinical work starts.
+      const [ticket] = await tx.$queryRaw<
+        LockedAppointmentQueueTicket[]
+      >(Prisma.sql`
+        SELECT
+          "queue_ticket_id"::TEXT AS "queue_ticket_id",
+          "business_date"::TEXT AS "business_date"
+        FROM "opd_queue_ticket"
+        WHERE "clinic_id" = ${scope.clinicId}
+          AND "branch_id" = ${scope.branchId}
+          AND "appointment_id" = ${id}
+          AND "source_type" = 'APPOINTMENT'
+        FOR UPDATE
+      `);
+      if (!ticket) {
+        throw new AppointmentQueueTicketInvariantError("MISSING_TICKET");
+      }
+
+      const encounter = await tx.opd_encounter.findUnique({
+        where: {
+          queue_ticket_id_clinic_id_branch_id: {
+            queue_ticket_id: ticket.queue_ticket_id,
+            clinic_id: scope.clinicId,
+            branch_id: scope.branchId,
+          },
+        },
+        select: { encounter_id: true },
+      });
+      if (encounter) {
+        throw new AppointmentQueueTicketInvariantError(
+          "ENCOUNTER_ALREADY_STARTED",
+        );
+      }
+
+      const appointmentUpdate = await tx.appointment.updateMany({
+        where: {
+          appointment_id: id,
+          clinic_id: scope.clinicId,
+          branch_id: scope.branchId,
+        },
+        data: {
+          date_appointment: data.dateAppointment,
+          start_time: data.startTime,
+          time_arrive: data.startTime,
+          end_time: data.endTime,
+          updated_at: now,
+        },
+      });
+      if (appointmentUpdate.count !== 1) {
+        throw new AppointmentQueueTicketInvariantError("CONCURRENT_CHANGE");
+      }
+
+      if (ticket.business_date !== data.dateAppointment) {
+        const queueSequence = await this.allocateQueueNumber(
+          data.dateAppointment,
+          scope,
+          tx,
+        );
+        const ticketUpdate = await tx.opd_queue_ticket.updateMany({
+          where: {
+            queue_ticket_id: ticket.queue_ticket_id,
+            clinic_id: scope.clinicId,
+            branch_id: scope.branchId,
+            appointment_id: id,
+            source_type: "APPOINTMENT",
+          },
+          data: {
+            business_date: this.toDateOnly(data.dateAppointment),
+            queue_sequence: queueSequence,
+            display_number: this.queueDisplayNumber(queueSequence),
+            version: { increment: 1 },
+            updated_at: now,
+          },
+        });
+        if (ticketUpdate.count !== 1) {
+          throw new AppointmentQueueTicketInvariantError("CONCURRENT_CHANGE");
+        }
+      }
+
+      const appointment = await tx.appointment.findFirst({
+        where: {
+          appointment_id: id,
+          clinic_id: scope.clinicId,
+          branch_id: scope.branchId,
+        },
+        include: { customer: true },
+      });
+      if (!appointment) {
+        throw new AppointmentQueueTicketInvariantError("CONCURRENT_CHANGE");
+      }
+      return appointment;
     });
 
     return this.attachExtra(updated);
   }
 
-
-  buildWhere(query: QueryAppointmentsDto, scope: RequestScope): Prisma.appointmentWhereInput {
+  buildWhere(
+    query: QueryAppointmentsDto,
+    scope: RequestScope,
+  ): Prisma.appointmentWhereInput {
     const where: Prisma.appointmentWhereInput = {
       clinic_id: scope.clinicId,
       branch_id: scope.branchId,
@@ -207,7 +341,10 @@ export class AppointmentsRepository {
     );
 
     return appointments.map((appointment) =>
-      this.mergeExtra(appointment, extrasByAppointmentId.get(appointment.appointment_id) ?? null),
+      this.mergeExtra(
+        appointment,
+        extrasByAppointmentId.get(appointment.appointment_id) ?? null,
+      ),
     );
   }
 
@@ -222,19 +359,17 @@ export class AppointmentsRepository {
 
   private mergeExtra<T extends AppointmentWithCustomer>(
     appointment: T,
-    extra:
-      | {
-          marketing_platform?: string | null;
-          campaign?: string | null;
-          numbing_time?: number | null;
-          preparation?: string | null;
-          preparation_tags?: Prisma.JsonValue | null;
-          internal_note?: string | null;
-          internal_tags?: Prisma.JsonValue | null;
-          notifications?: Prisma.JsonValue | null;
-          recurring?: Prisma.JsonValue | null;
-        }
-      | null,
+    extra: {
+      marketing_platform?: string | null;
+      campaign?: string | null;
+      numbing_time?: number | null;
+      preparation?: string | null;
+      preparation_tags?: Prisma.JsonValue | null;
+      internal_note?: string | null;
+      internal_tags?: Prisma.JsonValue | null;
+      notifications?: Prisma.JsonValue | null;
+      recurring?: Prisma.JsonValue | null;
+    } | null,
   ): AppointmentWithCustomer {
     if (!extra) return appointment;
 
@@ -309,6 +444,53 @@ export class AppointmentsRepository {
   }
 
   private unique(values: string[]): string[] {
-    return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+    return Array.from(
+      new Set(values.map((value) => value.trim()).filter(Boolean)),
+    );
+  }
+
+  private async allocateQueueNumber(
+    businessDate: string,
+    scope: RequestScope,
+    tx: Prisma.TransactionClient,
+  ): Promise<number> {
+    const periodKey = businessDate.replaceAll("-", "");
+    const sequence = await tx.opd_number_sequence.upsert({
+      where: {
+        clinic_id_branch_id_number_kind_period_key: {
+          clinic_id: scope.clinicId,
+          branch_id: scope.branchId,
+          number_kind: "QUEUE",
+          period_key: periodKey,
+        },
+      },
+      create: {
+        clinic_id: scope.clinicId,
+        branch_id: scope.branchId,
+        number_kind: "QUEUE",
+        period_key: periodKey,
+        next_value: 2n,
+      },
+      update: {
+        next_value: { increment: 1n },
+        version: { increment: 1 },
+      },
+      select: { next_value: true },
+    });
+    const allocated = sequence.next_value - 1n;
+    if (allocated > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error(
+        `QUEUE number sequence ${periodKey} exceeded the safe range`,
+      );
+    }
+    return Number(allocated);
+  }
+
+  private toDateOnly(value: string): Date {
+    return new Date(`${value}T00:00:00.000Z`);
+  }
+
+  private queueDisplayNumber(sequence: number): string {
+    return `Q${String(sequence).padStart(3, "0")}`;
   }
 }

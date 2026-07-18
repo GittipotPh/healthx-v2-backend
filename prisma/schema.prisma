@@ -2112,16 +2112,17 @@ model audit_log {
 }
 
 model ref_queue_step_status {
-  code         String         @id @db.VarChar(30)
-  label_th     String         @db.VarChar(100)
-  label_en     String?        @db.VarChar(100)
-  color        String?        @db.VarChar(20)
-  sort_order   Int
-  is_end_step  Boolean        @default(false)
-  is_active    Boolean        @default(true)
-  created_at   DateTime       @default(now()) @db.Timestamp(6)
-  updated_at   DateTime       @db.Timestamp(6)
-  queue_status queue_status[]
+  code              String             @id @db.VarChar(30)
+  label_th          String             @db.VarChar(100)
+  label_en          String?            @db.VarChar(100)
+  color             String?            @db.VarChar(20)
+  sort_order        Int
+  is_end_step       Boolean            @default(false)
+  is_active         Boolean            @default(true)
+  created_at        DateTime           @default(now()) @db.Timestamp(6)
+  updated_at        DateTime           @db.Timestamp(6)
+  queue_status      queue_status[]
+  opd_queue_tickets opd_queue_ticket[]
 }
 
 model ref_appointment_option {
@@ -2249,6 +2250,169 @@ model erp_inbound_command {
 
   @@unique([operation, command_id])
   @@index([received_at])
+}
+
+// App-owned stable worklist identity for appointment and walk-in OPD visits.
+// HealthX-owned customer/appointment/user rows are string references only.
+model opd_queue_ticket {
+  queue_ticket_id        String                @id @default(uuid()) @db.Uuid
+  clinic_id              String                @db.VarChar(50)
+  branch_id              String                @db.VarChar(50)
+  customer_id            String                @db.VarChar(50)
+  appointment_id         String?               @db.VarChar(50)
+  legacy_queue_status_id String?               @db.Uuid
+  source_type            String                @db.VarChar(20)
+  business_date          DateTime              @db.Date
+  current_step           String                @db.VarChar(30)
+  entered_at             DateTime              @db.Timestamptz(6)
+  queue_sequence         Int
+  display_number         String                @db.VarChar(30)
+  version                Int                   @default(1)
+  cancelled_at           DateTime?             @db.Timestamptz(6)
+  cancelled_by           String?               @db.VarChar(50)
+  cancellation_reason    String?               @db.VarChar(500)
+  created_by             String                @db.VarChar(50)
+  created_at             DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+  step                   ref_queue_step_status @relation(fields: [current_step], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "opd_queue_ticket_current_step_fkey")
+  encounter              opd_encounter?
+  transitions            queue_transition[]
+
+  @@unique([queue_ticket_id, clinic_id, branch_id], map: "opd_queue_ticket_tenant_uq")
+  @@unique([queue_ticket_id, clinic_id, branch_id, customer_id, business_date], map: "opd_queue_ticket_encounter_identity_uq")
+  @@unique([clinic_id, branch_id, appointment_id], map: "opd_queue_ticket_appointment_uq")
+  @@unique([clinic_id, branch_id, business_date, queue_sequence], map: "opd_queue_ticket_daily_seq_uq")
+  @@unique([clinic_id, branch_id, business_date, display_number], map: "opd_queue_ticket_display_no_uq")
+  @@index([clinic_id, branch_id, business_date, current_step], map: "opd_queue_ticket_worklist_idx")
+  @@index([clinic_id, branch_id, customer_id, business_date], map: "opd_queue_ticket_customer_idx")
+}
+
+// Row-level counter allocated under a lock/atomic increment. The period key is
+// interpreted by number_kind policy (daily queue uses YYYYMMDD Bangkok date).
+model opd_number_sequence {
+  number_sequence_id String   @id @default(uuid()) @db.Uuid
+  clinic_id          String   @db.VarChar(50)
+  branch_id          String   @db.VarChar(50)
+  number_kind        String   @db.VarChar(30)
+  period_key         String   @db.VarChar(30)
+  next_value         BigInt   @default(1)
+  version            Int      @default(1)
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@unique([clinic_id, branch_id, number_kind, period_key], map: "opd_number_sequence_scope_uq")
+}
+
+// OPD V2 aggregate. All HealthX-owned references deliberately remain scalar
+// strings; queue_ticket is an app-owned, tenant-safe relation.
+model opd_encounter {
+  encounter_id           String                 @id @default(uuid()) @db.Uuid
+  clinic_id              String                 @db.VarChar(50)
+  branch_id              String                 @db.VarChar(50)
+  customer_id            String                 @db.VarChar(50)
+  appointment_id         String?                @db.VarChar(50)
+  queue_ticket_id        String                 @db.Uuid
+  legacy_opd_id          String?                @db.VarChar(50)
+  attending_user_id      String?                @db.VarChar(50)
+  encounter_type         String                 @db.VarChar(20)
+  workflow_status        String                 @default("OPEN") @db.VarChar(20)
+  clinical_record_status String                 @default("DRAFT") @db.VarChar(20)
+  reconciliation_status  String                 @default("RECONCILED") @db.VarChar(20)
+  business_date          DateTime               @db.Date
+  started_at             DateTime               @db.Timestamptz(6)
+  started_by             String                 @db.VarChar(50)
+  finalized_at           DateTime?              @db.Timestamptz(6)
+  finalized_by           String?                @db.VarChar(50)
+  closed_at              DateTime?              @db.Timestamptz(6)
+  closed_by              String?                @db.VarChar(50)
+  cancelled_at           DateTime?              @db.Timestamptz(6)
+  cancelled_by           String?                @db.VarChar(50)
+  close_reason           String?                @db.VarChar(500)
+  cancellation_reason    String?                @db.VarChar(500)
+  version                Int                    @default(1)
+  created_at             DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime               @default(now()) @updatedAt @db.Timestamptz(6)
+  queue_ticket           opd_queue_ticket       @relation(fields: [queue_ticket_id, clinic_id, branch_id, customer_id, business_date], references: [queue_ticket_id, clinic_id, branch_id, customer_id, business_date], onDelete: Restrict, onUpdate: Cascade, map: "opd_encounter_ticket_identity_fkey")
+  transitions            queue_transition[]
+  draft_checkpoints      opd_draft_checkpoint[]
+
+  @@unique([encounter_id, clinic_id, branch_id], map: "opd_encounter_tenant_uq")
+  @@unique([queue_ticket_id, clinic_id, branch_id], map: "opd_encounter_queue_ticket_uq")
+  @@unique([queue_ticket_id, clinic_id, branch_id, customer_id, business_date], map: "opd_encounter_ticket_identity_uq")
+  @@unique([clinic_id, branch_id, legacy_opd_id], map: "opd_encounter_legacy_opd_uq")
+  @@index([clinic_id, branch_id, business_date, workflow_status], map: "opd_encounter_worklist_idx")
+  @@index([clinic_id, branch_id, customer_id, business_date], map: "opd_encounter_customer_idx")
+  @@index([clinic_id, branch_id, appointment_id], map: "opd_encounter_appointment_idx")
+}
+
+// Immutable history of queue-step changes. expected/result version makes one
+// transition per ticket version enforceable even across retries.
+model queue_transition {
+  queue_transition_id String           @id @default(uuid()) @db.Uuid
+  clinic_id           String           @db.VarChar(50)
+  branch_id           String           @db.VarChar(50)
+  queue_ticket_id     String           @db.Uuid
+  encounter_id        String?          @db.Uuid
+  appointment_id      String?          @db.VarChar(50)
+  from_step           String           @db.VarChar(30)
+  to_step             String           @db.VarChar(30)
+  actor_user_id       String           @db.VarChar(50)
+  reason              String?          @db.VarChar(500)
+  expected_version    Int
+  result_version      Int
+  occurred_at         DateTime         @default(now()) @db.Timestamptz(6)
+  queue_ticket        opd_queue_ticket @relation(fields: [queue_ticket_id, clinic_id, branch_id], references: [queue_ticket_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "queue_transition_ticket_tenant_fkey")
+  encounter           opd_encounter?   @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "queue_transition_encounter_tenant_fkey")
+
+  @@unique([clinic_id, branch_id, queue_ticket_id, result_version], map: "queue_transition_ticket_version_uq")
+  @@index([clinic_id, branch_id, encounter_id, occurred_at], map: "queue_transition_encounter_idx")
+  @@index([clinic_id, branch_id, appointment_id, occurred_at], map: "queue_transition_appointment_idx")
+}
+
+// Scoped command-idempotency claim/result. result_snapshot is deliberately a
+// minimal ID/status/version response, never a duplicate clinical payload.
+model api_idempotency {
+  api_idempotency_id String    @id @default(uuid()) @db.Uuid
+  clinic_id          String    @db.VarChar(50)
+  branch_id          String    @db.VarChar(50)
+  actor_user_id      String    @db.VarChar(50)
+  operation          String    @db.VarChar(100)
+  idempotency_key    String    @db.VarChar(200)
+  request_hash       String    @db.VarChar(64)
+  state              String    @default("IN_PROGRESS") @db.VarChar(20)
+  locked_at          DateTime  @default(now()) @db.Timestamptz(6)
+  lock_expires_at    DateTime  @db.Timestamptz(6)
+  resource_type      String?   @db.VarChar(50)
+  resource_id        String?   @db.VarChar(100)
+  result_snapshot    Json?
+  response_code      Int?
+  completed_at       DateTime? @db.Timestamptz(6)
+  expires_at         DateTime  @db.Timestamptz(6)
+  created_at         DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@unique([clinic_id, branch_id, actor_user_id, operation, idempotency_key], map: "api_idempotency_scope_key_uq")
+  @@index([state, lock_expires_at], map: "api_idempotency_lock_idx")
+  @@index([expires_at], map: "api_idempotency_expiry_idx")
+  @@index([clinic_id, branch_id, resource_type, resource_id], map: "api_idempotency_resource_idx")
+}
+
+// Explicit user save boundary; section content remains in its own versioned
+// resources and this row stores only their version manifest.
+model opd_draft_checkpoint {
+  draft_checkpoint_id String        @id @default(uuid()) @db.Uuid
+  clinic_id           String        @db.VarChar(50)
+  branch_id           String        @db.VarChar(50)
+  encounter_id        String        @db.Uuid
+  checkpoint_number   Int
+  resource_versions   Json
+  actor_user_id       String        @db.VarChar(50)
+  note                String?       @db.VarChar(500)
+  created_at          DateTime      @default(now()) @db.Timestamptz(6)
+  encounter           opd_encounter @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_draft_checkpoint_encounter_tenant_fkey")
+
+  @@unique([clinic_id, branch_id, encounter_id, checkpoint_number], map: "opd_draft_checkpoint_number_uq")
+  @@index([clinic_id, branch_id, encounter_id, created_at], map: "opd_draft_checkpoint_created_idx")
 }
 
 enum auditReferenceType {

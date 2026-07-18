@@ -9,5 +9,6 @@ import { QueueRepository } from "./queue.repository";
   imports: [AuditLogModule, ErpEventsModule],
   controllers: [QueueController],
   providers: [QueueService, QueueRepository],
+  exports: [QueueService],
 })
 export class QueueModule {}

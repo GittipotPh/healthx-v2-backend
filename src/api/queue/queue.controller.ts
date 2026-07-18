@@ -28,7 +28,10 @@ export class QueueController {
 
   @Get("today")
   @BaseOpenApiResponse(QueueTodayResult)
-  today(@Query() query: QueryQueueDto, @Scope() scope: RequestScope): Promise<QueueTodayResult> {
+  today(
+    @Query() query: QueryQueueDto,
+    @Scope() scope: RequestScope,
+  ): Promise<QueueTodayResult> {
     return this.queueService.today(query, scope);
   }
 

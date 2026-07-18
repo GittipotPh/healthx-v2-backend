@@ -94,5 +94,6 @@ describe("env", () => {
     // Both capabilities stay off by default — dev without a broker must boot.
     expect(validateEnv(BASE_ENV).ERP_OUTBOX_ENABLED).toBe(false);
     expect(validateEnv(BASE_ENV).ERP_COMMAND_API_ENABLED).toBe(false);
+    expect(validateEnv(BASE_ENV).OPD_V2_ENABLED).toBe(true);
   });
 });

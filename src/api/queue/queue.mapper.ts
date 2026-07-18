@@ -1,5 +1,9 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { statusAppointment, type customer_info, type queue_config } from "@prisma/client";
+import {
+  statusAppointment,
+  type customer_info,
+  type queue_config,
+} from "@prisma/client";
 import { QUEUE_STEP_COLUMNS, stepCodeToColumnId } from "./queue.constants";
 import {
   QueueAutomationSettingDto,
@@ -47,6 +51,29 @@ export interface AppointmentForQueue extends AppointmentRecord {
   opd?: { status_opd: string } | null;
 }
 
+export interface WalkInForQueue {
+  queue_ticket_id: string;
+  legacy_queue_status_id: string | null;
+  customer_id: string;
+  display_number: string;
+  current_step: string;
+  entered_at: Date;
+  version: number;
+  encounter_id: string;
+  legacy_opd_id: string;
+  opd_status: string;
+  customer: {
+    name: string;
+    lastname: string;
+    personal_id: string;
+    nickname: string | null;
+    phone_number: string | null;
+    gender: string;
+    customer_image: string | null;
+    allergy: string | null;
+  };
+}
+
 export const QUEUE_STATUSES = [
   "confirmed",
   "in-service",
@@ -61,17 +88,58 @@ export class QueueItemView {
   @ApiProperty()
   id!: string;
 
-  @ApiProperty()
-  appointmentId!: string;
+  @ApiProperty({ type: String, nullable: true })
+  appointmentId!: string | null;
+
+  @ApiProperty({
+    description: "Stable legacy HealthX customer reference; never a display HN",
+  })
+  customerId!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  legacyQueueStatusId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  queueTicketId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  encounterId!: string | null;
 
   @ApiProperty({ description: 'Display queue number, e.g. "Q001"' })
   queueNo!: string;
 
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: "ISO queue-step entry timestamp",
+  })
+  enteredAt!: string | null;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description: "Server-derived whole minutes since enteredAt",
+  })
+  waitMinutes!: number | null;
+
   @ApiProperty({ description: "Appointment start time (HH:mm)" })
   time!: string;
 
-  @ApiProperty({ description: 'Customer HN (personal id); "—" placeholder when absent' })
-  hn!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "Legacy customer.personal_id display value. Its canonical HN semantics are not yet verified.",
+  })
+  hn!: string | null;
+
+  @ApiProperty({
+    enum: ["LEGACY_PERSONAL_ID_UNVERIFIED"],
+    nullable: true,
+    description:
+      "Provenance for hn; null when no legacy identifier is available",
+  })
+  identifierSource!: "LEGACY_PERSONAL_ID_UNVERIFIED" | null;
 
   @ApiProperty({ type: String, nullable: true })
   name!: string | null;
@@ -94,12 +162,17 @@ export class QueueItemView {
   @ApiProperty({
     enum: QUEUE_STATUSES,
     enumName: "QueueStatus",
-    description: "Coarse 5-value status derived from statusAppointment (fallback when `step` is null)",
+    description:
+      "Coarse 5-value status derived from statusAppointment (fallback when `step` is null)",
   })
   status!: QueueStatus;
 
-  @ApiProperty({ enum: statusAppointment, enumName: "StatusAppointment" })
-  appointmentStatus!: statusAppointment;
+  @ApiProperty({
+    enum: statusAppointment,
+    enumName: "StatusAppointment",
+    nullable: true,
+  })
+  appointmentStatus!: statusAppointment | null;
 
   @ApiProperty({
     enum: QUEUE_STEP_COLUMNS,
@@ -125,8 +198,11 @@ export class QueueItemView {
   @ApiProperty({ type: String, nullable: true })
   customerImage!: string | null;
 
-  @ApiProperty({ type: [String] })
-  allergies!: string[];
+  @ApiProperty({ type: String, nullable: true })
+  legacyAllergy!: string | null;
+
+  @ApiProperty({ enum: ["LEGACY_CUSTOMER_INFO_UNVERIFIED"], nullable: true })
+  allergySource!: "LEGACY_CUSTOMER_INFO_UNVERIFIED" | null;
 
   @ApiProperty({ type: String, nullable: true })
   appointmentDetail!: string | null;
@@ -169,28 +245,80 @@ function deriveStatus(status: statusAppointment): QueueStatus {
   }
 }
 
+function deriveStepStatus(step: string): QueueStatus {
+  switch (step) {
+    case "CANCELLED":
+      return "cancelled";
+    case "COMPLETED":
+      return "completed";
+    case "CONFIRMED":
+    case "ARRIVED":
+      return "confirmed";
+    case "CONSULTING":
+    case "PENDING_PAYMENT":
+    case "ANESTHETIC":
+    case "IN_SERVICE":
+    case "DISPENSING":
+    case "VERIFIED":
+      return "in-service";
+    default:
+      return "pending";
+  }
+}
+
+function waitMinutes(enteredAt: Date | null, now: Date): number | null {
+  if (!enteredAt) return null;
+  return Math.max(
+    0,
+    Math.floor((now.getTime() - enteredAt.getTime()) / 60_000),
+  );
+}
+
 export function toQueueItemView(
   row: AppointmentForQueue,
   index: number,
-  history?: { cancelHistory: number; lateHistory: number; rescheduleHistory: number },
-  stepCode?: string | null,
+  history?: {
+    cancelHistory: number;
+    lateHistory: number;
+    rescheduleHistory: number;
+  },
+  identity?: {
+    legacyQueueStatusId: string | null;
+    currentStep: string | null;
+    queueTicketId: string | null;
+    encounterId: string | null;
+    displayNumber: string | null;
+    enteredAt: Date | null;
+  },
+  now = new Date(),
 ): QueueItemView {
-  const name = row.customer ? `${row.customer.name} ${row.customer.lastname}`.trim() : null;
-  const queueNo = `Q${String(index + 1).padStart(3, "0")}`;
+  const name = row.customer
+    ? `${row.customer.name} ${row.customer.lastname}`.trim()
+    : null;
+  const queueNo =
+    identity?.displayNumber ?? `Q${String(index + 1).padStart(3, "0")}`;
 
-  const rawAllergies = row.customer?.customer_info?.allergy;
-  const allergies = rawAllergies
-    ? rawAllergies.split(",").map((s) => s.trim()).filter(Boolean)
-    : [];
+  const legacyAllergy = row.customer?.customer_info?.allergy ?? null;
 
   return {
+    // Compatibility: existing queue actions still use `id` as appointmentId.
+    // V2 callers must use the explicit queueTicketId for ticket operations.
     id: row.appointment_id,
     appointmentId: row.appointment_id,
+    customerId: row.customer_id,
+    legacyQueueStatusId: identity?.legacyQueueStatusId ?? null,
+    queueTicketId: identity?.queueTicketId ?? null,
+    encounterId: identity?.encounterId ?? null,
     queueNo,
+    enteredAt: identity?.enteredAt?.toISOString() ?? null,
+    waitMinutes: waitMinutes(identity?.enteredAt ?? null, now),
     time: row.start_time,
     // Never fall back to customer_id here: it's an internal DB id, not an HN,
     // and must not be shown to (or leak into) the client.
-    hn: row.customer?.personal_id ?? "—",
+    hn: row.customer?.personal_id || null,
+    identifierSource: row.customer?.personal_id
+      ? "LEGACY_PERSONAL_ID_UNVERIFIED"
+      : null,
     name,
     nickname: row.customer?.nickname ?? null,
     phone: row.customer?.phone_number ?? null,
@@ -199,17 +327,70 @@ export function toQueueItemView(
     channel: row.channel,
     status: deriveStatus(row.status_appointment),
     appointmentStatus: row.status_appointment,
-    step: stepCode ? stepCodeToColumnId(stepCode) : null,
+    step: identity?.currentStep
+      ? stepCodeToColumnId(identity.currentStep)
+      : null,
     opdId: row.opd_id,
     opdStatus: row.opd ? row.opd.status_opd : null,
     isConsult: row.is_consult,
     applyAnesthetic: row.apply_anesthetic,
     customerImage: row.customer?.customer_image ?? null,
-    allergies,
+    legacyAllergy,
+    allergySource: legacyAllergy ? "LEGACY_CUSTOMER_INFO_UNVERIFIED" : null,
     appointmentDetail: row.appointment_detail,
     cancelHistory: history?.cancelHistory ?? 0,
     lateHistory: history?.lateHistory ?? 0,
     rescheduleHistory: history?.rescheduleHistory ?? 0,
+  };
+}
+
+export function toWalkInQueueItemView(
+  row: WalkInForQueue,
+  now = new Date(),
+): QueueItemView {
+  const name = `${row.customer.name} ${row.customer.lastname}`.trim() || null;
+  const identifier = row.customer.personal_id || null;
+  const legacyAllergy = row.customer.allergy;
+  const bangkokTime = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Bangkok",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(row.entered_at);
+
+  return {
+    id: row.queue_ticket_id,
+    appointmentId: null,
+    customerId: row.customer_id,
+    legacyQueueStatusId: row.legacy_queue_status_id,
+    queueTicketId: row.queue_ticket_id,
+    encounterId: row.encounter_id,
+    queueNo: row.display_number,
+    enteredAt: row.entered_at.toISOString(),
+    waitMinutes: waitMinutes(row.entered_at, now),
+    time: bangkokTime,
+    hn: identifier,
+    identifierSource: identifier ? "LEGACY_PERSONAL_ID_UNVERIFIED" : null,
+    name,
+    nickname: row.customer.nickname,
+    phone: row.customer.phone_number,
+    gender: row.customer.gender || null,
+    doctorRoom: null,
+    channel: "WALK_IN",
+    status: deriveStepStatus(row.current_step),
+    appointmentStatus: null,
+    step: stepCodeToColumnId(row.current_step),
+    opdId: row.legacy_opd_id,
+    opdStatus: row.opd_status,
+    isConsult: false,
+    applyAnesthetic: false,
+    customerImage: row.customer.customer_image,
+    legacyAllergy,
+    allergySource: legacyAllergy ? "LEGACY_CUSTOMER_INFO_UNVERIFIED" : null,
+    appointmentDetail: null,
+    cancelHistory: 0,
+    lateHistory: 0,
+    rescheduleHistory: 0,
   };
 }
 
@@ -219,7 +400,11 @@ export function toQueueItemView(
  * shapes reuse the save DTO classes so the wire contract is single-sourced.
  */
 export class QueueConfigView {
-  @ApiProperty({ type: String, nullable: true, description: "null when serving unsaved defaults" })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: "null when serving unsaved defaults",
+  })
   queueConfigId!: string | null;
 
   @ApiProperty()
@@ -256,10 +441,18 @@ export class QueueConfigView {
   @ApiProperty({ type: String, nullable: true })
   updatedBy!: string | null;
 
-  @ApiProperty({ type: String, nullable: true, description: "ISO timestamp; null for unsaved defaults" })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: "ISO timestamp; null for unsaved defaults",
+  })
   updatedAt!: string | null;
 
-  @ApiProperty({ type: String, nullable: true, description: "ISO timestamp; null for unsaved defaults" })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: "ISO timestamp; null for unsaved defaults",
+  })
   createdAt!: string | null;
 }
 

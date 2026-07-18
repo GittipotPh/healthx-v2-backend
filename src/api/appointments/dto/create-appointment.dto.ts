@@ -1,5 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsArray, IsBoolean, IsInt, IsObject, IsOptional, IsString, Matches, MaxLength } from "class-validator";
+import {
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+} from "class-validator";
+import { IsBusinessDate } from "./business-date.validator";
 
 /**
  * Date/time columns on the legacy `appointment` table are VARCHAR and are
@@ -8,7 +18,6 @@ import { IsArray, IsBoolean, IsInt, IsObject, IsOptional, IsString, Matches, Max
  * strings: dates as YYYY-MM-DD (legacy `moment().format('YYYY-MM-DD')`) and
  * times as HH:mm (legacy work-schedule validates `/^(\d{2}):(\d{2})$/`).
  */
-const DATE_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /**
@@ -31,24 +40,45 @@ export class CreateAppointmentDto {
   customerId!: string;
 
   /** e.g. "2026-07-01". */
-  @ApiProperty({ description: "YYYY-MM-DD (zero-padded, lexically sortable)", example: "2026-07-01" })
+  @ApiProperty({
+    description: "YYYY-MM-DD (zero-padded, lexically sortable)",
+    example: "2026-07-01",
+  })
   @IsString()
-  @Matches(DATE_PATTERN, { message: "dateAppointment must match YYYY-MM-DD" })
+  @IsBusinessDate({
+    message:
+      "dateAppointment must be a real calendar date in YYYY-MM-DD format",
+  })
   dateAppointment!: string;
 
-  @ApiProperty({ description: "HH:mm (24-hour, zero-padded)", example: "09:30" })
+  @ApiProperty({
+    description: "HH:mm (24-hour, zero-padded)",
+    example: "09:30",
+  })
   @IsString()
-  @Matches(TIME_PATTERN, { message: "timeArrive must match HH:mm (24-hour, zero-padded)" })
+  @Matches(TIME_PATTERN, {
+    message: "timeArrive must match HH:mm (24-hour, zero-padded)",
+  })
   timeArrive!: string;
 
-  @ApiProperty({ description: "HH:mm (24-hour, zero-padded)", example: "10:00" })
+  @ApiProperty({
+    description: "HH:mm (24-hour, zero-padded)",
+    example: "10:00",
+  })
   @IsString()
-  @Matches(TIME_PATTERN, { message: "startTime must match HH:mm (24-hour, zero-padded)" })
+  @Matches(TIME_PATTERN, {
+    message: "startTime must match HH:mm (24-hour, zero-padded)",
+  })
   startTime!: string;
 
-  @ApiProperty({ description: "HH:mm (24-hour, zero-padded)", example: "11:00" })
+  @ApiProperty({
+    description: "HH:mm (24-hour, zero-padded)",
+    example: "11:00",
+  })
   @IsString()
-  @Matches(TIME_PATTERN, { message: "endTime must match HH:mm (24-hour, zero-padded)" })
+  @Matches(TIME_PATTERN, {
+    message: "endTime must match HH:mm (24-hour, zero-padded)",
+  })
   endTime!: string;
 
   @ApiProperty()

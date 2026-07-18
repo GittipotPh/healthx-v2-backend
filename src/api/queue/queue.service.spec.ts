@@ -1,5 +1,15 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
-import { auditReferenceType, role_enum, statusAppointment } from "@prisma/client";
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from "@nestjs/common";
+import {
+  auditReferenceType,
+  role_enum,
+  statusAppointment,
+  type Prisma,
+} from "@prisma/client";
 import { QueueService } from "./queue.service";
 import type { QueueRepository } from "./queue.repository";
 import type { ErpSalesOrderEmitter } from "../../integrations/erp-events/erp-sales-order-emitter.service";
@@ -21,20 +31,25 @@ const SCOPE: RequestScope = {
   roles: [role_enum.NURSE],
 };
 
-const PRINCIPAL: Principal = { email: "user@example.com", name: "User Example" };
+const PRINCIPAL: Principal = {
+  email: "user@example.com",
+  name: "User Example",
+};
 
 const AUDIT_VIEW = { id: 1, action: "move" } as unknown as AuditLogView;
 
 // Sentinel standing in for the Prisma.TransactionClient handed to the callback.
-const TX = { __tx: true };
+const TX = { __tx: true } as unknown as Prisma.TransactionClient;
 
 /**
  * A persisted queue_config row as the repository would return it. Deep-cloned
  * so tests that mutate their row can't pollute DEFAULT_QUEUE_CONFIG (which
  * other tests reach via the no-config-row fallback).
  */
-function makeQueueConfigRow(): Record<string, unknown> {
-  const config = JSON.parse(JSON.stringify(DEFAULT_QUEUE_CONFIG)) as typeof DEFAULT_QUEUE_CONFIG;
+function makeQueueConfigRow() {
+  const config = JSON.parse(
+    JSON.stringify(DEFAULT_QUEUE_CONFIG),
+  ) as typeof DEFAULT_QUEUE_CONFIG;
   return {
     queue_config_id: "cfg-1",
     clinic_id: SCOPE.clinicId,
@@ -52,7 +67,9 @@ function makeQueueConfigRow(): Record<string, unknown> {
   };
 }
 
-function makeService(options: { appointment?: object | null; queueConfig?: object | null } = {}) {
+function makeService(
+  options: { appointment?: object | null; queueConfig?: object | null } = {},
+) {
   const prisma = {
     $transaction: jest.fn(
       async (callback: (tx: typeof TX) => Promise<unknown>) => callback(TX),
@@ -60,11 +77,28 @@ function makeService(options: { appointment?: object | null; queueConfig?: objec
   } as unknown as PrismaService;
 
   const repository = {
+    findTodayQueue: jest.fn().mockResolvedValue([]),
+    findWalkInQueue: jest.fn().mockResolvedValue([]),
+    findCustomersHistories: jest.fn().mockResolvedValue({}),
+    findQueueStatusesByAppointmentIds: jest.fn().mockResolvedValue({}),
+    findV2QueueIdentitiesByAppointmentIds: jest.fn().mockResolvedValue({}),
+    findV2QueueTicketById: jest.fn().mockResolvedValue({
+      queue_ticket_id: "ticket-1",
+      appointment_id: "appt-1",
+      customer_id: "customer-1",
+      current_step: "ARRIVED",
+      version: 1,
+    }),
     findAppointment: jest
       .fn()
-      .mockResolvedValue(options.appointment === undefined ? { appointment_id: "appt-1" } : options.appointment),
+      .mockResolvedValue(
+        options.appointment === undefined
+          ? { appointment_id: "appt-1" }
+          : options.appointment,
+      ),
     updateAppointmentStatus: jest.fn().mockResolvedValue({}),
     upsertQueueStep: jest.fn().mockResolvedValue({}),
+    transitionV2QueueTicket: jest.fn().mockResolvedValue("UPDATED"),
     upsertConsultation: jest.fn().mockResolvedValue({}),
     upsertAnesthetic: jest.fn().mockResolvedValue({}),
     findQueueConfig: jest.fn().mockResolvedValue(options.queueConfig ?? null),
@@ -87,13 +121,214 @@ function makeService(options: { appointment?: object | null; queueConfig?: objec
   } as unknown as ErpSalesOrderEmitter;
 
   return {
-    service: new QueueService(prisma, repository, auditLogService, erpSalesOrderEmitter),
+    service: new QueueService(
+      prisma,
+      repository,
+      auditLogService,
+      erpSalesOrderEmitter,
+    ),
     prisma,
     repository,
     auditLogService,
     erpSalesOrderEmitter,
   };
 }
+
+describe("QueueService.today", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("uses the Bangkok calendar date rather than the UTC date", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-07-17T18:30:00.000Z"));
+    const { service, repository } = makeService();
+
+    const result = await service.today({}, SCOPE);
+
+    expect(result.date).toBe("2026-07-18");
+    expect(repository.findTodayQueue).toHaveBeenCalledWith(
+      SCOPE.clinicId,
+      SCOPE.branchId,
+      "2026-07-18",
+    );
+    expect(repository.findWalkInQueue).toHaveBeenCalledWith(
+      SCOPE.clinicId,
+      SCOPE.branchId,
+      "2026-07-18",
+    );
+  });
+
+  it("rejects a nonexistent calendar date before querying", async () => {
+    const { service, repository } = makeService();
+
+    await expect(service.today({ date: "2026-02-31" }, SCOPE)).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(repository.findTodayQueue).not.toHaveBeenCalled();
+    expect(repository.findWalkInQueue).not.toHaveBeenCalled();
+  });
+
+  it("keeps a V2 walk-in visible after reload with stable identity, wait, and facets", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-07-18T03:30:00.000Z"));
+    const { service, repository } = makeService();
+    jest.spyOn(repository, "findWalkInQueue").mockResolvedValue([
+      {
+        queue_ticket_id: "ticket-walkin-1",
+        legacy_queue_status_id: null,
+        customer_id: "customer-1",
+        display_number: "Q007",
+        current_step: "ARRIVED",
+        entered_at: new Date("2026-07-18T03:15:00.000Z"),
+        version: 1,
+        encounter_id: "encounter-walkin-1",
+        legacy_opd_id: "OPDV2-20260718-000007",
+        opd_status: "PENDING",
+        customer: {
+          name: "Walk",
+          lastname: "In",
+          personal_id: "",
+          nickname: null,
+          phone_number: null,
+          gender: "FEMALE",
+          customer_image: null,
+          allergy: null,
+        },
+      },
+    ]);
+
+    const result = await service.today({ date: "2026-07-18" }, SCOPE);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toEqual(
+      expect.objectContaining({
+        id: "ticket-walkin-1",
+        appointmentId: null,
+        customerId: "customer-1",
+        queueTicketId: "ticket-walkin-1",
+        encounterId: "encounter-walkin-1",
+        opdId: "OPDV2-20260718-000007",
+        waitMinutes: 15,
+        hn: null,
+        identifierSource: null,
+      }),
+    );
+    expect(result.facets).toEqual({
+      total: 1,
+      appointments: 0,
+      walkIns: 1,
+      byStep: { arrived: 1 },
+    });
+  });
+});
+
+describe("QueueService.startEncounter", () => {
+  it("uses the caller transaction to advance legacy + V2 queue state, history, and audit", async () => {
+    const { service, repository, auditLogService } = makeService({
+      appointment: { appointment_id: "appt-1", opd_id: "opd-1" },
+    });
+
+    await service.startEncounter(
+      {
+        queueTicketId: "ticket-1",
+        encounterId: "encounter-1",
+        appointmentId: "appt-1",
+        legacyOpdId: "opd-1",
+      },
+      SCOPE,
+      PRINCIPAL,
+      TX,
+    );
+
+    expect(repository.updateAppointmentStatus).toHaveBeenCalledWith(
+      SCOPE.clinicId,
+      SCOPE.branchId,
+      "appt-1",
+      statusAppointment.IN_SERVICE,
+      TX,
+    );
+    expect(repository.upsertQueueStep).toHaveBeenCalledWith(
+      SCOPE.clinicId,
+      SCOPE.branchId,
+      "appt-1",
+      "IN_SERVICE",
+      TX,
+    );
+    expect(repository.transitionV2QueueTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueTicketId: "ticket-1",
+        appointmentId: "appt-1",
+        toStep: "IN_SERVICE",
+        actorUserId: SCOPE.userId,
+      }),
+      TX,
+    );
+    expect(auditLogService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        referenceId: "ticket-1",
+        action: "start-treatment",
+        fromStatus: "ARRIVED",
+        toStatus: "IN_SERVICE",
+        actorUserId: SCOPE.userId,
+      }),
+      TX,
+    );
+  });
+
+  it("rejects a terminal queue ticket before writing encounter queue state", async () => {
+    const { service, repository } = makeService();
+    jest.spyOn(repository, "findV2QueueTicketById").mockResolvedValue({
+      queue_ticket_id: "ticket-1",
+      appointment_id: "appt-1",
+      customer_id: "customer-1",
+      current_step: "COMPLETED",
+      cancelled_at: null,
+      version: 1,
+    } as never);
+
+    await expect(
+      service.startEncounter(
+        {
+          queueTicketId: "ticket-1",
+          encounterId: "encounter-1",
+          appointmentId: "appt-1",
+          legacyOpdId: "opd-1",
+        },
+        SCOPE,
+        PRINCIPAL,
+        TX,
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(repository.updateAppointmentStatus).not.toHaveBeenCalled();
+    expect(repository.transitionV2QueueTicket).not.toHaveBeenCalled();
+  });
+
+  it("rejects a queue ticket already beyond In-Service", async () => {
+    const { service, repository } = makeService();
+    jest.spyOn(repository, "findV2QueueTicketById").mockResolvedValue({
+      queue_ticket_id: "ticket-1",
+      appointment_id: "appt-1",
+      customer_id: "customer-1",
+      current_step: "DISPENSING",
+      cancelled_at: null,
+      version: 1,
+    } as never);
+
+    await expect(
+      service.startEncounter(
+        {
+          queueTicketId: "ticket-1",
+          encounterId: "encounter-1",
+          appointmentId: "appt-1",
+          legacyOpdId: "opd-1",
+        },
+        SCOPE,
+        PRINCIPAL,
+        TX,
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(repository.updateAppointmentStatus).not.toHaveBeenCalled();
+  });
+});
 
 function dto(overrides: Partial<TransitionQueueDto> = {}): TransitionQueueDto {
   return {
@@ -122,12 +357,18 @@ describe("QueueService.transition", () => {
   it("writes status + step + audit inside one $transaction on a step move", async () => {
     const { service, prisma, repository, auditLogService } = makeService();
 
-    const result = await service.transition(dto({ step: "ARRIVED" }), SCOPE, PRINCIPAL);
+    const result = await service.transition(
+      dto({ step: "ARRIVED" }),
+      SCOPE,
+      PRINCIPAL,
+    );
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     // The step->status map syncs the legacy status, and every write receives
     // the same transaction client the $transaction callback was given.
     expect(repository.updateAppointmentStatus).toHaveBeenCalledWith(
+      SCOPE.clinicId,
+      SCOPE.branchId,
       "appt-1",
       statusAppointment.ARRIVED,
       TX,
@@ -137,6 +378,17 @@ describe("QueueService.transition", () => {
       SCOPE.branchId,
       "appt-1",
       "ARRIVED",
+      TX,
+    );
+    expect(repository.transitionV2QueueTicket).toHaveBeenCalledWith(
+      {
+        clinicId: SCOPE.clinicId,
+        branchId: SCOPE.branchId,
+        appointmentId: "appt-1",
+        toStep: "ARRIVED",
+        actorUserId: SCOPE.userId,
+        reason: null,
+      },
       TX,
     );
     expect(auditLogService.create).toHaveBeenCalledWith(
@@ -165,6 +417,8 @@ describe("QueueService.transition", () => {
     );
 
     expect(repository.updateAppointmentStatus).toHaveBeenCalledWith(
+      SCOPE.clinicId,
+      SCOPE.branchId,
       "appt-1",
       statusAppointment.CANCEL,
       TX,
@@ -199,7 +453,7 @@ describe("QueueService.transition", () => {
 
   it("rejects transitions to disabled columns", async () => {
     const configRow = makeQueueConfigRow();
-    (configRow.columns as any)[2].enabled = false; // consulting is index 2
+    configRow.columns[2].enabled = false; // consulting is index 2
 
     const { service } = makeService({ queueConfig: configRow });
 
@@ -211,7 +465,7 @@ describe("QueueService.transition", () => {
   it("rejects transitions for unauthorized user roles", async () => {
     const configRow = makeQueueConfigRow();
     // arrived only allows ADMIN
-    (configRow.permissions as any).arrived = ["ADMIN"];
+    configRow.permissions.arrived = ["ADMIN"];
 
     const { service } = makeService({ queueConfig: configRow });
 
@@ -223,16 +477,25 @@ describe("QueueService.transition", () => {
   it("rejects transitions that skip required non-skippable columns", async () => {
     const configRow = makeQueueConfigRow();
     // set arrived as required and non-skippable
-    (configRow.columns as any)[1].isRequired = true; // arrived is index 1
-    (configRow.columns as any)[1].canSkip = false;
+    configRow.columns[1].isRequired = true; // arrived is index 1
+    configRow.columns[1].canSkip = false;
 
     // mock current status as confirmed (index 0)
     const mockRepo = {
-      findAppointment: jest.fn().mockResolvedValue({ appointment_id: "appt-1" }),
+      findAppointment: jest
+        .fn()
+        .mockResolvedValue({ appointment_id: "appt-1" }),
       findQueueConfig: jest.fn().mockResolvedValue(configRow),
-      findQueueStatus: jest.fn().mockResolvedValue({ current_step: "CONFIRMED" }),
+      findQueueStatus: jest
+        .fn()
+        .mockResolvedValue({ current_step: "CONFIRMED" }),
     };
-    const customService = new QueueService(null as any, mockRepo as any, null as any, null as any);
+    const customService = new QueueService(
+      null as unknown as PrismaService,
+      mockRepo as unknown as QueueRepository,
+      null as unknown as AuditLogService,
+      null as unknown as ErpSalesOrderEmitter,
+    );
 
     await expect(
       customService.transition(dto({ step: "CONSULTING" }), SCOPE, PRINCIPAL), // skips arrived
@@ -242,15 +505,24 @@ describe("QueueService.transition", () => {
   it("rejects transitions when prerequisites are not met", async () => {
     const configRow = makeQueueConfigRow();
     // completed requires OPD
-    (configRow.transitions as any).completed.requiresOPD = true;
+    configRow.transitions.completed.requiresOPD = true;
 
     // mock appointment with no opd_id
     const mockRepo = {
-      findAppointment: jest.fn().mockResolvedValue({ appointment_id: "appt-1", opd_id: null }),
+      findAppointment: jest
+        .fn()
+        .mockResolvedValue({ appointment_id: "appt-1", opd_id: null }),
       findQueueConfig: jest.fn().mockResolvedValue(configRow),
-      findQueueStatus: jest.fn().mockResolvedValue({ current_step: "VERIFIED" }),
+      findQueueStatus: jest
+        .fn()
+        .mockResolvedValue({ current_step: "VERIFIED" }),
     };
-    const customService = new QueueService(null as any, mockRepo as any, null as any, null as any);
+    const customService = new QueueService(
+      null as unknown as PrismaService,
+      mockRepo as unknown as QueueRepository,
+      null as unknown as AuditLogService,
+      null as unknown as ErpSalesOrderEmitter,
+    );
 
     await expect(
       customService.transition(dto({ step: "COMPLETED" }), SCOPE, PRINCIPAL),
@@ -264,7 +536,9 @@ describe("QueueService.transition", () => {
 
     await service.transition(dto({ step: "COMPLETED" }), SCOPE, PRINCIPAL);
 
-    expect(erpSalesOrderEmitter.emitPaidSaleOrdersForOpd).toHaveBeenCalledTimes(1);
+    expect(erpSalesOrderEmitter.emitPaidSaleOrdersForOpd).toHaveBeenCalledTimes(
+      1,
+    );
     expect(erpSalesOrderEmitter.emitPaidSaleOrdersForOpd).toHaveBeenCalledWith(
       TX,
       { clinicId: SCOPE.clinicId, branchId: SCOPE.branchId },
@@ -279,7 +553,9 @@ describe("QueueService.transition", () => {
 
     await service.transition(dto({ step: "ARRIVED" }), SCOPE, PRINCIPAL);
 
-    expect(erpSalesOrderEmitter.emitPaidSaleOrdersForOpd).not.toHaveBeenCalled();
+    expect(
+      erpSalesOrderEmitter.emitPaidSaleOrdersForOpd,
+    ).not.toHaveBeenCalled();
   });
 
   it("does not emit ERP events when the completed visit has no OPD", async () => {
@@ -288,7 +564,7 @@ describe("QueueService.transition", () => {
     // with DEFAULT_QUEUE_CONFIG.
     const configRow = makeQueueConfigRow();
     configRow.transitions = {
-      ...(configRow.transitions as object),
+      ...configRow.transitions,
       completed: {
         requiresPayment: false,
         requiresOPD: false,
@@ -303,11 +579,15 @@ describe("QueueService.transition", () => {
 
     await service.transition(dto({ step: "COMPLETED" }), SCOPE, PRINCIPAL);
 
-    expect(erpSalesOrderEmitter.emitPaidSaleOrdersForOpd).not.toHaveBeenCalled();
+    expect(
+      erpSalesOrderEmitter.emitPaidSaleOrdersForOpd,
+    ).not.toHaveBeenCalled();
   });
 });
 
-function anestheticDto(overrides: Partial<SaveAnestheticDto> = {}): SaveAnestheticDto {
+function anestheticDto(
+  overrides: Partial<SaveAnestheticDto> = {},
+): SaveAnestheticDto {
   return {
     appointmentId: "appt-1",
     allergyStatus: "none",
@@ -321,9 +601,9 @@ describe("QueueService.saveAnesthetic", () => {
   it("throws NotFound when the appointment is not in the caller's clinic/branch", async () => {
     const { service, repository, prisma } = makeService({ appointment: null });
 
-    await expect(service.saveAnesthetic(anestheticDto(), SCOPE, PRINCIPAL)).rejects.toThrow(
-      NotFoundException,
-    );
+    await expect(
+      service.saveAnesthetic(anestheticDto(), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(NotFoundException);
     expect(repository.findAppointment).toHaveBeenCalledWith(
       SCOPE.clinicId,
       SCOPE.branchId,
@@ -346,6 +626,21 @@ describe("QueueService.saveAnesthetic", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it("rejects anesthetic saves that skip a required queue column", async () => {
+    const configRow = makeQueueConfigRow();
+    configRow.columns[1].isRequired = true;
+    configRow.columns[1].canSkip = false;
+    const { service, repository } = makeService({ queueConfig: configRow });
+    jest
+      .spyOn(repository, "findQueueStatus")
+      .mockResolvedValue({ current_step: "CONFIRMED" } as never);
+
+    await expect(
+      service.saveAnesthetic(anestheticDto(), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(BadRequestException);
+    expect(repository.upsertAnesthetic).not.toHaveBeenCalled();
+  });
+
   it("upserts anesthetic + status + step + exactly one audit inside one $transaction", async () => {
     const { service, prisma, repository, auditLogService } = makeService();
 
@@ -365,12 +660,21 @@ describe("QueueService.saveAnesthetic", () => {
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     // The anesthetic row is upserted with the scope-derived owner and the same tx.
     expect(repository.upsertAnesthetic).toHaveBeenCalledWith(
-      { clinicId: SCOPE.clinicId, branchId: SCOPE.branchId, userId: SCOPE.userId },
-      expect.objectContaining({ appointmentId: "appt-1", nurseRef: "พยาบาลสุดา" }),
+      {
+        clinicId: SCOPE.clinicId,
+        branchId: SCOPE.branchId,
+        userId: SCOPE.userId,
+      },
+      expect.objectContaining({
+        appointmentId: "appt-1",
+        nurseRef: "พยาบาลสุดา",
+      }),
       TX,
     );
     // The card stays on ANESTHETIC (status + step) in the same transaction.
     expect(repository.updateAppointmentStatus).toHaveBeenCalledWith(
+      SCOPE.clinicId,
+      SCOPE.branchId,
       "appt-1",
       statusAppointment.ANESTHETIC,
       TX,
@@ -380,6 +684,17 @@ describe("QueueService.saveAnesthetic", () => {
       SCOPE.branchId,
       "appt-1",
       "ANESTHETIC",
+      TX,
+    );
+    expect(repository.transitionV2QueueTicket).toHaveBeenCalledWith(
+      {
+        clinicId: SCOPE.clinicId,
+        branchId: SCOPE.branchId,
+        appointmentId: "appt-1",
+        toStep: "ANESTHETIC",
+        actorUserId: SCOPE.userId,
+        reason: "Anesthetic recorded",
+      },
       TX,
     );
     // Exactly one audit row, actor derived server-side, with anesthetic metadata.
@@ -408,17 +723,37 @@ describe("QueueService.saveAnesthetic", () => {
     );
     expect(result).toEqual({ appointmentId: "appt-1", audit: AUDIT_VIEW });
   });
+
+  it("rejects a stale V2 ticket instead of committing divergent anesthetic queue state", async () => {
+    const { service, repository, auditLogService } = makeService();
+    jest
+      .spyOn(repository, "transitionV2QueueTicket")
+      .mockResolvedValue("CONFLICT");
+
+    await expect(
+      service.saveAnesthetic(anestheticDto(), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(ConflictException);
+    expect(auditLogService.create).not.toHaveBeenCalled();
+  });
 });
 
 /** A valid full-replace config payload (deep-cloned defaults + overrides). */
-function configDto(mutate?: (dto: SaveQueueConfigDto) => void): SaveQueueConfigDto {
-  const dto = JSON.parse(JSON.stringify(DEFAULT_QUEUE_CONFIG)) as SaveQueueConfigDto;
+function configDto(
+  mutate?: (dto: SaveQueueConfigDto) => void,
+): SaveQueueConfigDto {
+  const dto = JSON.parse(
+    JSON.stringify(DEFAULT_QUEUE_CONFIG),
+  ) as SaveQueueConfigDto;
   mutate?.(dto);
   return dto;
 }
 
 const ADMIN_SCOPE: RequestScope = { ...SCOPE, roles: [role_enum.ADMIN] };
-const ROOT_SCOPE: RequestScope = { ...SCOPE, isClinicRootUser: true, roles: [] };
+const ROOT_SCOPE: RequestScope = {
+  ...SCOPE,
+  isClinicRootUser: true,
+  roles: [],
+};
 
 describe("QueueService.getQueueConfig", () => {
   it("returns built-in defaults without writing when no row exists", async () => {
@@ -437,11 +772,16 @@ describe("QueueService.getQueueConfig", () => {
   });
 
   it("maps a persisted row to the camelCase view", async () => {
-    const { service, repository } = makeService({ queueConfig: makeQueueConfigRow() });
+    const { service, repository } = makeService({
+      queueConfig: makeQueueConfigRow(),
+    });
 
     const view = await service.getQueueConfig(SCOPE);
 
-    expect(repository.findQueueConfig).toHaveBeenCalledWith(SCOPE.clinicId, SCOPE.branchId);
+    expect(repository.findQueueConfig).toHaveBeenCalledWith(
+      SCOPE.clinicId,
+      SCOPE.branchId,
+    );
     expect(view.queueConfigId).toBe("cfg-1");
     expect(view.updatedBy).toBe("user-9");
     expect(view.updatedAt).toBe("2026-07-10T00:00:00.000Z");
@@ -453,9 +793,9 @@ describe("QueueService.updateQueueConfig", () => {
   it("rejects callers who are neither clinic root nor ADMIN before touching the database", async () => {
     const { service, repository, prisma } = makeService();
 
-    await expect(service.updateQueueConfig(configDto(), SCOPE, PRINCIPAL)).rejects.toThrow(
-      ForbiddenException,
-    );
+    await expect(
+      service.updateQueueConfig(configDto(), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(ForbiddenException);
     expect(repository.upsertQueueConfig).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
@@ -463,13 +803,19 @@ describe("QueueService.updateQueueConfig", () => {
   it("saves upsert + audit inside one $transaction for an ADMIN", async () => {
     const { service, prisma, repository, auditLogService } = makeService();
 
-    const view = await service.updateQueueConfig(configDto(), ADMIN_SCOPE, PRINCIPAL);
+    const view = await service.updateQueueConfig(
+      configDto(),
+      ADMIN_SCOPE,
+      PRINCIPAL,
+    );
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(repository.upsertQueueConfig).toHaveBeenCalledWith(
       ADMIN_SCOPE.clinicId,
       ADMIN_SCOPE.branchId,
-      expect.objectContaining({ automation: expect.objectContaining({ defaultColumn: "arrived" }) }),
+      expect.objectContaining({
+        automation: expect.objectContaining({ defaultColumn: "arrived" }),
+      }),
       ADMIN_SCOPE.userId,
       TX,
     );
@@ -501,13 +847,49 @@ describe("QueueService.updateQueueConfig", () => {
   });
 
   it.each<[string, (dto: SaveQueueConfigDto) => void]>([
-    ["duplicate column ids", (dto) => { dto.columns[1].id = dto.columns[0].id; }],
-    ["sla referencing an unknown column", (dto) => { dto.sla[0].columnId = "cancelled"; }],
-    ["duplicate sla entries", (dto) => { dto.sla[1].columnId = dto.sla[0].columnId; }],
-    ["warning above critical", (dto) => { dto.sla[1].warningMinutes = 99; dto.sla[1].criticalMinutes = 15; }],
-    ["defaultColumn pointing at a disabled column", (dto) => { dto.columns[1].enabled = false; }],
-    ["permissions keyed by an unknown column", (dto) => { dto.permissions["not-a-column"] = ["ADMIN"]; }],
-    ["permissions containing an unknown role", (dto) => { dto.permissions.arrived = ["SUPERUSER"]; }],
+    [
+      "duplicate column ids",
+      (dto) => {
+        dto.columns[1].id = dto.columns[0].id;
+      },
+    ],
+    [
+      "sla referencing an unknown column",
+      (dto) => {
+        dto.sla[0].columnId = "cancelled";
+      },
+    ],
+    [
+      "duplicate sla entries",
+      (dto) => {
+        dto.sla[1].columnId = dto.sla[0].columnId;
+      },
+    ],
+    [
+      "warning above critical",
+      (dto) => {
+        dto.sla[1].warningMinutes = 99;
+        dto.sla[1].criticalMinutes = 15;
+      },
+    ],
+    [
+      "defaultColumn pointing at a disabled column",
+      (dto) => {
+        dto.columns[1].enabled = false;
+      },
+    ],
+    [
+      "permissions keyed by an unknown column",
+      (dto) => {
+        dto.permissions["not-a-column"] = ["ADMIN"];
+      },
+    ],
+    [
+      "permissions containing an unknown role",
+      (dto) => {
+        dto.permissions.arrived = ["SUPERUSER"];
+      },
+    ],
   ])("rejects %s before touching the database", async (_label, mutate) => {
     const { service, repository, prisma } = makeService();
 
@@ -531,7 +913,9 @@ describe("QueueService.updateQueueConfig", () => {
   });
 });
 
-function consultDto(overrides: Partial<SaveConsultationDto> = {}): SaveConsultationDto {
+function consultDto(
+  overrides: Partial<SaveConsultationDto> = {},
+): SaveConsultationDto {
   return {
     appointmentId: "appt-1",
     outcome: "interested",
@@ -543,15 +927,37 @@ describe("QueueService.saveConsultation", () => {
   it("throws NotFound when the appointment is not in the caller's clinic/branch", async () => {
     const { service, repository, prisma } = makeService({ appointment: null });
 
-    await expect(service.saveConsultation(consultDto(), SCOPE, PRINCIPAL)).rejects.toThrow(
-      NotFoundException,
-    );
+    await expect(
+      service.saveConsultation(consultDto(), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(NotFoundException);
     expect(repository.findAppointment).toHaveBeenCalledWith(
       SCOPE.clinicId,
       SCOPE.branchId,
       "appt-1",
     );
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects consultation saves when the target queue column is disabled", async () => {
+    const configRow = makeQueueConfigRow();
+    configRow.columns[2].enabled = false;
+    const { service, repository } = makeService({ queueConfig: configRow });
+
+    await expect(
+      service.saveConsultation(consultDto(), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(BadRequestException);
+    expect(repository.upsertConsultation).not.toHaveBeenCalled();
+  });
+
+  it("rejects consultation saves when the caller role lacks target-column permission", async () => {
+    const configRow = makeQueueConfigRow();
+    configRow.permissions.consulting = ["ADMIN"];
+    const { service, repository } = makeService({ queueConfig: configRow });
+
+    await expect(
+      service.saveConsultation(consultDto(), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(ForbiddenException);
+    expect(repository.upsertConsultation).not.toHaveBeenCalled();
   });
 
   it("upserts consultation + status + step + exactly one audit inside one $transaction", async () => {
@@ -572,12 +978,21 @@ describe("QueueService.saveConsultation", () => {
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     // The consult row is upserted with the scope-derived owner and the same tx.
     expect(repository.upsertConsultation).toHaveBeenCalledWith(
-      { clinicId: SCOPE.clinicId, branchId: SCOPE.branchId, userId: SCOPE.userId },
-      expect.objectContaining({ appointmentId: "appt-1", consultantRef: "เซลล์ประจำ" }),
+      {
+        clinicId: SCOPE.clinicId,
+        branchId: SCOPE.branchId,
+        userId: SCOPE.userId,
+      },
+      expect.objectContaining({
+        appointmentId: "appt-1",
+        consultantRef: "เซลล์ประจำ",
+      }),
       TX,
     );
     // The card advances to CONSULTING (status + step) in the same transaction.
     expect(repository.updateAppointmentStatus).toHaveBeenCalledWith(
+      SCOPE.clinicId,
+      SCOPE.branchId,
       "appt-1",
       statusAppointment.CONSULTING,
       TX,
@@ -587,6 +1002,17 @@ describe("QueueService.saveConsultation", () => {
       SCOPE.branchId,
       "appt-1",
       "CONSULTING",
+      TX,
+    );
+    expect(repository.transitionV2QueueTicket).toHaveBeenCalledWith(
+      {
+        clinicId: SCOPE.clinicId,
+        branchId: SCOPE.branchId,
+        appointmentId: "appt-1",
+        toStep: "CONSULTING",
+        actorUserId: SCOPE.userId,
+        reason: "Consultation recorded",
+      },
       TX,
     );
     // Exactly one audit row, actor derived server-side, with consult metadata.
@@ -612,5 +1038,17 @@ describe("QueueService.saveConsultation", () => {
       TX,
     );
     expect(result).toEqual({ appointmentId: "appt-1", audit: AUDIT_VIEW });
+  });
+
+  it("rejects a stale V2 ticket instead of committing divergent consultation queue state", async () => {
+    const { service, repository, auditLogService } = makeService();
+    jest
+      .spyOn(repository, "transitionV2QueueTicket")
+      .mockResolvedValue("CONFLICT");
+
+    await expect(
+      service.saveConsultation(consultDto(), SCOPE, PRINCIPAL),
+    ).rejects.toThrow(ConflictException);
+    expect(auditLogService.create).not.toHaveBeenCalled();
   });
 });
