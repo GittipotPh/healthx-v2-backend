@@ -17,8 +17,10 @@ import { PrismaPg } from "@prisma/adapter-pg";
 const EMAIL = "admin.test@healthx.local";
 const PASSWORD = "Admin@1234";
 
+const DATABASE_URL = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/healthx_optionb_test?schema=public";
+
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+  adapter: new PrismaPg({ connectionString: DATABASE_URL }),
 });
 
 async function main(): Promise<void> {
