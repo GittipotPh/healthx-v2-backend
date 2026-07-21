@@ -53,7 +53,7 @@ export class OpdOrderService {
       page,
       pageSize,
       pricingPolicy: "catalog-snapshot-v1",
-      releaseAvailable: false,
+      releaseAvailable: true,
     };
   }
 

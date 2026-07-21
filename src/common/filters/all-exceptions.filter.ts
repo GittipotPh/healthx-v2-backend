@@ -17,6 +17,7 @@ interface ErrorResponse {
   currentVersion?: number;
   currentStatus?: string;
   updatedAt?: string;
+  details?: unknown;
 }
 
 /**
@@ -96,6 +97,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
         : {}),
       ...(typeof candidate.updatedAt === "string"
         ? { updatedAt: candidate.updatedAt }
+        : {}),
+      ...(candidate.details !== undefined
+        ? { details: candidate.details }
         : {}),
     };
   }

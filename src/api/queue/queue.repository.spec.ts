@@ -29,6 +29,16 @@ function makeRepository() {
       create: jest.fn().mockResolvedValue({}),
       update: jest.fn().mockResolvedValue({}),
     },
+    prescription: {
+      findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
+    },
+    opd: {
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+    service_usage: {
+      count: jest.fn().mockResolvedValue(0),
+    },
   };
   return {
     repository: new QueueRepository(prisma as unknown as PrismaService),
@@ -127,5 +137,51 @@ describe("QueueRepository tenant-scoped writes", () => {
       ),
     ).rejects.toThrow(ConflictException);
     expect(prisma.appointment_anesthetic.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("QueueRepository OPD prerequisites", () => {
+  it("treats a scoped prescription without a sale order as unpaid", async () => {
+    const { repository, prisma } = makeRepository();
+    prisma.prescription.findMany.mockResolvedValue([
+      { prescribe_id: "prescription-1", sale_order: null },
+    ]);
+
+    await expect(
+      repository.hasUnpaidPrescriptions("opd-1", BRANCH_ID),
+    ).resolves.toBe(true);
+    expect(prisma.prescription.findMany).toHaveBeenCalledWith({
+      where: { opd_id: "opd-1", branch_id: BRANCH_ID },
+      include: { sale_order: true },
+    });
+  });
+
+  it("uses the complete branch-scoped OPD identity for medicine and course checks", async () => {
+    const { repository, prisma } = makeRepository();
+    prisma.prescription.count.mockResolvedValue(1);
+    prisma.opd.findFirst.mockResolvedValue({ management_item: "usage-1" });
+    prisma.service_usage.count.mockResolvedValue(1);
+
+    await expect(repository.hasPrescriptions("opd-1", BRANCH_ID)).resolves.toBe(
+      true,
+    );
+    await expect(repository.hasUsedCourse("opd-1", BRANCH_ID)).resolves.toBe(
+      true,
+    );
+
+    expect(prisma.prescription.count).toHaveBeenCalledWith({
+      where: { opd_id: "opd-1", branch_id: BRANCH_ID },
+    });
+    expect(prisma.opd.findFirst).toHaveBeenCalledWith({
+      where: { opd_id: "opd-1", branch_id: BRANCH_ID },
+      select: { management_item: true },
+    });
+    expect(prisma.service_usage.count).toHaveBeenCalledWith({
+      where: {
+        service_usage_id: "usage-1",
+        branch_id: BRANCH_ID,
+        service_usage_status: "APPROVED",
+      },
+    });
   });
 });

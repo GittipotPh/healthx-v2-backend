@@ -22,6 +22,9 @@ import { OpdClinicalNoteService } from "./opd-clinical-note.service";
 import { OpdOrderController } from "./opd-order.controller";
 import { OpdOrderRepository } from "./opd-order.repository";
 import { OpdOrderService } from "./opd-order.service";
+import { OpdOrderReleaseController } from "./opd-order-release.controller";
+import { OpdOrderReleaseRepository } from "./opd-order-release.repository";
+import { OpdOrderReleaseService } from "./opd-order-release.service";
 
 @Module({
   imports: [AuditLogModule, QueueModule],
@@ -32,6 +35,7 @@ import { OpdOrderService } from "./opd-order.service";
     OpdClinicalHistoryController,
     OpdClinicalNoteController,
     OpdOrderController,
+    OpdOrderReleaseController,
   ],
   providers: [
     OpdService,
@@ -48,6 +52,8 @@ import { OpdOrderService } from "./opd-order.service";
     OpdClinicalNoteRepository,
     OpdOrderService,
     OpdOrderRepository,
+    OpdOrderReleaseService,
+    OpdOrderReleaseRepository,
     OpdV2EnabledGuard,
   ],
   exports: [OpdService],

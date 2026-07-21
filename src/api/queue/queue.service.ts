@@ -305,6 +305,7 @@ export class QueueService {
     if (rule.requiresPayment) {
       const hasUnpaid = await this.repository.hasUnpaidPrescriptions(
         input.legacyOpdId,
+        scope.branchId,
         tx,
       );
       if (hasUnpaid) {
@@ -534,6 +535,7 @@ export class QueueService {
         if (rule.requiresPayment && appointment.opd_id) {
           const hasUnpaid = await this.repository.hasUnpaidPrescriptions(
             appointment.opd_id,
+            scope.branchId,
           );
           if (hasUnpaid) {
             throw new BadRequestException(
@@ -570,6 +572,7 @@ export class QueueService {
         if (rule.requiresPayment && appointment.opd_id) {
           const hasUnpaid = await this.repository.hasUnpaidPrescriptions(
             appointment.opd_id,
+            scope.branchId,
           );
           if (hasUnpaid) {
             throw new BadRequestException(
@@ -586,6 +589,7 @@ export class QueueService {
           if (appointment.opd_id) {
             const hasCourse = await this.repository.hasUsedCourse(
               appointment.opd_id,
+              scope.branchId,
             );
             if (!hasCourse) {
               throw new BadRequestException(
@@ -602,6 +606,7 @@ export class QueueService {
           if (appointment.opd_id) {
             const hasPresc = await this.repository.hasPrescriptions(
               appointment.opd_id,
+              scope.branchId,
             );
             if (!hasPresc) {
               throw new BadRequestException(

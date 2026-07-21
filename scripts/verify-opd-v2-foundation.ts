@@ -33,6 +33,11 @@ async function main(): Promise<void> {
         const orderItemCount = await tx.opd_order_item.count();
         const medicationInstructionCount =
           await tx.opd_medication_instruction.count();
+        const orderReleaseCount = await tx.opd_order_release.count();
+        const orderReleaseItemCount = await tx.opd_order_release_item.count();
+        const orderPrescriptionLinkCount =
+          await tx.opd_order_prescription_link.count();
+        const orderSaleLinkCount = await tx.opd_order_sale_link.count();
         const candidateCounts = await tx.$queryRaw<BackfillCandidateCountRow[]>(
           Prisma.sql`
           WITH candidate AS (
@@ -338,30 +343,82 @@ async function main(): Promise<void> {
           Prisma.sql`
           SELECT COUNT(*)::BIGINT AS count
           FROM (
-            SELECT draft_order.order_id::TEXT AS resource_id
-            FROM opd_order AS draft_order
+            SELECT app_order.order_id::TEXT AS resource_id
+            FROM opd_order AS app_order
             LEFT JOIN opd_encounter AS encounter
-              ON encounter.encounter_id = draft_order.encounter_id
-             AND encounter.clinic_id = draft_order.clinic_id
-             AND encounter.branch_id = draft_order.branch_id
+              ON encounter.encounter_id = app_order.encounter_id
+             AND encounter.clinic_id = app_order.clinic_id
+             AND encounter.branch_id = app_order.branch_id
+            LEFT JOIN opd_order_release AS release
+              ON release.order_id = app_order.order_id
+             AND release.encounter_id = app_order.encounter_id
+             AND release.clinic_id = app_order.clinic_id
+             AND release.branch_id = app_order.branch_id
             LEFT JOIN LATERAL (
               SELECT COALESCE(SUM(item.gross_amount), 0) AS subtotal
               FROM opd_order_item AS item
-              WHERE item.order_id = draft_order.order_id
-                AND item.encounter_id = draft_order.encounter_id
-                AND item.clinic_id = draft_order.clinic_id
-                AND item.branch_id = draft_order.branch_id
+              WHERE item.order_id = app_order.order_id
+                AND item.encounter_id = app_order.encounter_id
+                AND item.clinic_id = app_order.clinic_id
+                AND item.branch_id = app_order.branch_id
                 AND item.status = 'ACTIVE'
             ) AS item_total ON TRUE
             WHERE encounter.encounter_id IS NULL
-               OR draft_order.status IS DISTINCT FROM 'DRAFT'
-               OR draft_order.currency IS DISTINCT FROM 'THB'
-               OR draft_order.version < 1
-               OR draft_order.subtotal_amount < 0
-               OR draft_order.discount_total_amount IS DISTINCT FROM 0::DECIMAL
-               OR draft_order.tax_total_amount IS DISTINCT FROM 0::DECIMAL
-               OR draft_order.net_total_amount IS DISTINCT FROM draft_order.subtotal_amount
-               OR draft_order.subtotal_amount IS DISTINCT FROM item_total.subtotal
+               OR app_order.status NOT IN ('DRAFT', 'RELEASED', 'VOIDED')
+               OR app_order.currency IS DISTINCT FROM 'THB'
+               OR app_order.version < 1
+               OR app_order.subtotal_amount < 0
+               OR app_order.discount_total_amount < 0
+               OR app_order.discount_total_amount > app_order.subtotal_amount
+               OR app_order.tax_total_amount IS DISTINCT FROM 0::DECIMAL
+               OR app_order.net_total_amount IS DISTINCT FROM ROUND(
+                 app_order.subtotal_amount - app_order.discount_total_amount,
+                 2
+               )
+               OR (
+                 app_order.status = 'DRAFT'
+                 AND (
+                   release.release_id IS NOT NULL
+                   OR app_order.released_by IS NOT NULL
+                   OR app_order.released_at IS NOT NULL
+                   OR app_order.voided_by IS NOT NULL
+                   OR app_order.voided_at IS NOT NULL
+                   OR app_order.void_reason IS NOT NULL
+                   OR app_order.discount_total_amount IS DISTINCT FROM 0::DECIMAL
+                   OR app_order.net_total_amount IS DISTINCT FROM app_order.subtotal_amount
+                   OR app_order.subtotal_amount IS DISTINCT FROM item_total.subtotal
+                 )
+               )
+               OR (
+                 app_order.status IN ('RELEASED', 'VOIDED')
+                 AND (
+                   release.release_id IS NULL
+                   OR app_order.released_by IS DISTINCT FROM release.released_by
+                   OR app_order.released_at IS DISTINCT FROM release.released_at
+                   OR app_order.subtotal_amount IS DISTINCT FROM release.subtotal_amount
+                   OR app_order.discount_total_amount IS DISTINCT FROM release.promotion_discount_amount
+                   OR app_order.tax_total_amount IS DISTINCT FROM release.tax_amount
+                   OR app_order.net_total_amount IS DISTINCT FROM release.net_total_amount
+                   OR (
+                     app_order.status = 'RELEASED'
+                     AND (
+                       app_order.version IS DISTINCT FROM release.result_order_version
+                       OR app_order.voided_by IS NOT NULL
+                       OR app_order.voided_at IS NOT NULL
+                       OR app_order.void_reason IS NOT NULL
+                     )
+                   )
+                   OR (
+                     app_order.status = 'VOIDED'
+                     AND (
+                       app_order.version IS DISTINCT FROM release.result_order_version + 1
+                       OR app_order.voided_by IS NULL
+                       OR app_order.voided_at IS NULL
+                       OR NULLIF(BTRIM(app_order.void_reason), '') IS NULL
+                     )
+                   )
+                 )
+               )
 
             UNION ALL
 
@@ -457,6 +514,222 @@ async function main(): Promise<void> {
                    OR NULLIF(BTRIM(instruction.duration_unit), '') IS NULL
                  )
                )
+          ) AS mismatch
+        `,
+        );
+        const orderReleaseIntegrityMismatches = await tx.$queryRaw<CountRow[]>(
+          Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM (
+            SELECT release.release_id::TEXT AS resource_id
+            FROM opd_order_release AS release
+            INNER JOIN opd_order AS app_order
+              ON app_order.order_id = release.order_id
+             AND app_order.encounter_id = release.encounter_id
+             AND app_order.clinic_id = release.clinic_id
+             AND app_order.branch_id = release.branch_id
+            LEFT JOIN opd_order_prescription_link AS prescription_link
+              ON prescription_link.release_id = release.release_id
+             AND prescription_link.order_id = release.order_id
+             AND prescription_link.encounter_id = release.encounter_id
+             AND prescription_link.clinic_id = release.clinic_id
+             AND prescription_link.branch_id = release.branch_id
+            LEFT JOIN opd_order_sale_link AS sale_link
+              ON sale_link.release_id = release.release_id
+             AND sale_link.order_id = release.order_id
+             AND sale_link.encounter_id = release.encounter_id
+             AND sale_link.clinic_id = release.clinic_id
+             AND sale_link.branch_id = release.branch_id
+            LEFT JOIN LATERAL (
+              SELECT
+                COUNT(*)::BIGINT AS item_count,
+                COALESCE(SUM(item.gross_amount), 0) AS subtotal,
+                COALESCE(SUM(item.discount_amount), 0) AS promotion_discount,
+                COALESCE(SUM(item.tax_amount), 0) AS tax,
+                COALESCE(SUM(item.net_amount), 0) AS net_total
+              FROM opd_order_release_item AS item
+              WHERE item.release_id = release.release_id
+                AND item.order_id = release.order_id
+                AND item.encounter_id = release.encounter_id
+                AND item.clinic_id = release.clinic_id
+                AND item.branch_id = release.branch_id
+            ) AS release_totals ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT COUNT(*)::BIGINT AS item_count
+              FROM opd_order_item AS item
+              WHERE item.order_id = release.order_id
+                AND item.encounter_id = release.encounter_id
+                AND item.clinic_id = release.clinic_id
+                AND item.branch_id = release.branch_id
+                AND item.status = 'ACTIVE'
+            ) AS active_items ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT COUNT(*)::BIGINT AS audit_count
+              FROM audit_log AS audit
+              WHERE audit.clinic_id = release.clinic_id
+                AND audit.branch_id = release.branch_id
+                AND audit.reference_type = 'OPD'
+                AND audit.reference_id = release.encounter_id::TEXT
+                AND audit.action = 'order.medication.release'
+                AND audit.metadata ->> 'releaseId' = release.release_id::TEXT
+            ) AS release_audit ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT COUNT(*)::BIGINT AS audit_count
+              FROM audit_log AS audit
+              WHERE audit.clinic_id = release.clinic_id
+                AND audit.branch_id = release.branch_id
+                AND audit.reference_type = 'OPD'
+                AND audit.reference_id = release.encounter_id::TEXT
+                AND audit.action = 'order.medication-release.void'
+                AND audit.metadata ->> 'releaseId' = release.release_id::TEXT
+            ) AS void_audit ON TRUE
+            WHERE prescription_link.prescription_link_id IS NULL
+               OR sale_link.sale_link_id IS NULL
+               OR prescription_link.customer_id IS DISTINCT FROM sale_link.customer_id
+               OR release.source_order_version < 1
+               OR release.result_order_version IS DISTINCT FROM release.source_order_version + 1
+               OR release.currency IS DISTINCT FROM 'THB'
+               OR release.pricing_policy IS DISTINCT FROM 'opd-medication-release-price-v1'
+               OR release.tax_policy IS DISTINCT FROM 'opd-medication-no-vat-v1'
+               OR release.safety_source IS DISTINCT FROM 'LEGACY_CUSTOMER_INFO_UNVERIFIED'
+               OR release.tax_amount IS DISTINCT FROM 0::DECIMAL
+               OR release.net_total_amount IS DISTINCT FROM ROUND(
+                 release.subtotal_amount - release.promotion_discount_amount,
+                 2
+               )
+               OR release_totals.item_count IS DISTINCT FROM active_items.item_count
+               OR release_totals.item_count < 1
+               OR release_totals.subtotal IS DISTINCT FROM release.subtotal_amount
+               OR release_totals.promotion_discount IS DISTINCT FROM release.promotion_discount_amount
+               OR release_totals.tax IS DISTINCT FROM release.tax_amount
+               OR release_totals.net_total IS DISTINCT FROM release.net_total_amount
+               OR release_audit.audit_count IS DISTINCT FROM 1::BIGINT
+               OR (
+                 app_order.status = 'VOIDED'
+                 AND void_audit.audit_count IS DISTINCT FROM 1::BIGINT
+               )
+
+            UNION ALL
+
+            SELECT release.release_id::TEXT AS resource_id
+            FROM opd_order_release AS release
+            INNER JOIN opd_order AS app_order
+              ON app_order.order_id = release.order_id
+             AND app_order.encounter_id = release.encounter_id
+             AND app_order.clinic_id = release.clinic_id
+             AND app_order.branch_id = release.branch_id
+            LEFT JOIN opd_order_prescription_link AS prescription_link
+              ON prescription_link.release_id = release.release_id
+            LEFT JOIN opd_order_sale_link AS sale_link
+              ON sale_link.release_id = release.release_id
+            LEFT JOIN prescription AS legacy_prescription
+              ON legacy_prescription.prescribe_id = prescription_link.legacy_prescribe_id
+             AND legacy_prescription.clinic_id = release.clinic_id
+             AND legacy_prescription.branch_id = release.branch_id
+            LEFT JOIN sale_order AS legacy_sale
+              ON legacy_sale.sale_order_id = sale_link.legacy_sale_order_id
+             AND legacy_sale.clinic_id = release.clinic_id
+             AND legacy_sale.branch_id = release.branch_id
+            WHERE legacy_prescription.prescribe_id IS NULL
+               OR legacy_sale.sale_order_id IS NULL
+               OR legacy_prescription.opd_id IS DISTINCT FROM prescription_link.legacy_opd_id
+               OR legacy_prescription.customer_id IS DISTINCT FROM prescription_link.customer_id
+               OR legacy_prescription.sale_order_id IS DISTINCT FROM sale_link.legacy_sale_order_id
+               OR legacy_prescription.user_create IS DISTINCT FROM release.prescriber_user_id
+               OR legacy_sale.customer_id IS DISTINCT FROM sale_link.customer_id
+               OR legacy_sale.total IS DISTINCT FROM release.subtotal_amount
+               OR legacy_sale.promotion_discount IS DISTINCT FROM release.promotion_discount_amount
+               OR legacy_sale.customer_discount IS DISTINCT FROM 0::DECIMAL
+               OR legacy_sale.voucher_discount IS DISTINCT FROM 0::DECIMAL
+               OR legacy_sale.extra_discount IS DISTINCT FROM 0::DECIMAL
+               OR legacy_sale.subtotal IS DISTINCT FROM release.net_total_amount
+               OR legacy_sale."totalDue" IS DISTINCT FROM release.net_total_amount
+               OR legacy_sale.status IS DISTINCT FROM 'ACTIVE'
+               OR (
+                 app_order.status = 'RELEASED'
+                 AND (
+                   legacy_prescription.status NOT IN ('WAITING', 'SUCCESS')
+                   OR legacy_sale.sale_order_status NOT IN ('PENDING', 'PARTAIL', 'PAID')
+                 )
+               )
+               OR (
+                 app_order.status = 'VOIDED'
+                 AND (
+                   legacy_prescription.status IS DISTINCT FROM 'CANCEL'
+                   OR legacy_sale.sale_order_status IS DISTINCT FROM 'DELETED'
+                 )
+               )
+
+            UNION ALL
+
+            SELECT release_item.release_item_id::TEXT AS resource_id
+            FROM opd_order_release_item AS release_item
+            INNER JOIN opd_order_release AS release
+              ON release.release_id = release_item.release_id
+             AND release.order_id = release_item.order_id
+             AND release.encounter_id = release_item.encounter_id
+             AND release.clinic_id = release_item.clinic_id
+             AND release.branch_id = release_item.branch_id
+            INNER JOIN opd_order_prescription_link AS prescription_link
+              ON prescription_link.release_id = release.release_id
+            INNER JOIN opd_order_sale_link AS sale_link
+              ON sale_link.release_id = release.release_id
+            LEFT JOIN opd_order_item AS order_item
+              ON order_item.order_item_id = release_item.order_item_id
+             AND order_item.order_id = release_item.order_id
+             AND order_item.encounter_id = release_item.encounter_id
+             AND order_item.clinic_id = release_item.clinic_id
+             AND order_item.branch_id = release_item.branch_id
+            LEFT JOIN prescription_item AS legacy_prescription_item
+              ON legacy_prescription_item.id = release_item.legacy_prescription_item_id
+             AND legacy_prescription_item.prescribe_id = prescription_link.legacy_prescribe_id
+            LEFT JOIN sale_order_item AS legacy_sale_item
+              ON legacy_sale_item.sale_order_item_id = release_item.legacy_sale_order_item_id
+             AND legacy_sale_item.sale_order_id = sale_link.legacy_sale_order_id
+             AND legacy_sale_item.branch_id = release_item.branch_id
+            WHERE order_item.order_item_id IS NULL
+               OR release_item.source_type IS DISTINCT FROM 'PRODUCT'
+               OR release_item.category NOT IN ('MEDICINE', 'DRUG')
+               OR release_item.tax_type IS DISTINCT FROM 'NO_VAT'
+               OR release_item.tax_amount IS DISTINCT FROM 0::DECIMAL
+               OR release_item.gross_amount IS DISTINCT FROM ROUND(
+                 release_item.quantity * release_item.base_unit_price_amount,
+                 2
+               )
+               OR release_item.net_amount IS DISTINCT FROM ROUND(
+                 release_item.quantity * release_item.unit_price_amount,
+                 2
+               )
+               OR release_item.discount_amount IS DISTINCT FROM ROUND(
+                 release_item.gross_amount - release_item.net_amount,
+                 2
+               )
+               OR legacy_prescription_item.id IS NULL
+               OR legacy_prescription_item.drug_id IS DISTINCT FROM release_item.source_id
+               OR legacy_prescription_item.drug_name IS DISTINCT FROM release_item.name_snapshot
+               OR legacy_prescription_item.price IS DISTINCT FROM release_item.base_unit_price_amount
+               OR legacy_prescription_item.qty IS DISTINCT FROM release_item.quantity
+               OR legacy_prescription_item.total_price IS DISTINCT FROM release_item.net_amount
+               OR legacy_prescription_item.detail IS DISTINCT FROM release_item.sig_text
+               OR legacy_prescription_item.lot_id IS DISTINCT FROM release_item.lot_id
+               OR legacy_prescription_item.date_exp IS DISTINCT FROM release_item.expiry_at
+               OR legacy_sale_item.sale_order_item_id IS NULL
+               OR legacy_sale_item.item_id IS DISTINCT FROM release_item.source_id
+               OR legacy_sale_item.item_name IS DISTINCT FROM release_item.name_snapshot
+               OR legacy_sale_item.price_per_unit IS DISTINCT FROM release_item.base_unit_price_amount
+               OR legacy_sale_item.quantity IS DISTINCT FROM release_item.quantity
+               OR legacy_sale_item.discount IS DISTINCT FROM ROUND(
+                 release_item.base_unit_price_amount - release_item.unit_price_amount,
+                 2
+               )
+               OR legacy_sale_item.total IS DISTINCT FROM release_item.net_amount
+               OR legacy_sale_item.net IS DISTINCT FROM release_item.unit_price_amount
+               OR legacy_sale_item.lot_id IS DISTINCT FROM release_item.lot_id
+               OR legacy_sale_item.promotion_price IS DISTINCT FROM CASE
+                 WHEN release_item.pricing_source = 'PROMOTION'
+                 THEN release_item.unit_price_amount
+                 ELSE 0::DECIMAL
+               END
           ) AS mismatch
         `,
         );
@@ -566,6 +839,10 @@ async function main(): Promise<void> {
           orderRows: orderCount,
           orderItemRows: orderItemCount,
           medicationInstructionRows: medicationInstructionCount,
+          orderReleaseRows: orderReleaseCount,
+          orderReleaseItemRows: orderReleaseItemCount,
+          orderPrescriptionLinkRows: orderPrescriptionLinkCount,
+          orderSaleLinkRows: orderSaleLinkCount,
           validLegacyPairsMissingTicket: Number(
             candidateCounts[0]?.valid_missing ?? 0n,
           ),
@@ -602,6 +879,9 @@ async function main(): Promise<void> {
           ),
           orderIntegrityMismatches: Number(
             orderIntegrityMismatches[0]?.count ?? 0n,
+          ),
+          orderReleaseIntegrityMismatches: Number(
+            orderReleaseIntegrityMismatches[0]?.count ?? 0n,
           ),
           unsafeLegacyOpdNumbers: Number(
             unsafeLegacyOpdNumbers[0]?.count ?? 0n,
@@ -643,6 +923,7 @@ async function main(): Promise<void> {
       report.clinicalNoteIntegrityMismatches > 0 ||
       report.intakeIntegrityMismatches > 0 ||
       report.orderIntegrityMismatches > 0 ||
+      report.orderReleaseIntegrityMismatches > 0 ||
       report.unsafeLegacyOpdNumbers > 0 ||
       report.duplicateActiveDailyWalkIns > 0 ||
       report.missingActiveWalkInUniquenessIndex > 0 ||

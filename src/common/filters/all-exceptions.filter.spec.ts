@@ -1,4 +1,5 @@
-import type { ArgumentsHost } from "@nestjs/common";
+import { BadRequestException } from "@nestjs/common";
+import { ExecutionContextHost } from "@nestjs/core/helpers/execution-context-host";
 import { VersionConflictException } from "../version-conflict.exception";
 import { AllExceptionsFilter } from "./all-exceptions.filter";
 
@@ -6,11 +7,7 @@ describe("AllExceptionsFilter", () => {
   it("preserves the stable optimistic-concurrency metadata", () => {
     const json = jest.fn();
     const status = jest.fn().mockReturnValue({ json });
-    const host = {
-      switchToHttp: () => ({
-        getResponse: () => ({ status }),
-      }),
-    } as unknown as ArgumentsHost;
+    const host = new ExecutionContextHost([{}, { status }]);
 
     new AllExceptionsFilter().catch(
       new VersionConflictException({
@@ -34,6 +31,35 @@ describe("AllExceptionsFilter", () => {
       currentVersion: 3,
       currentStatus: "DRAFT",
       updatedAt: "2026-07-20T12:00:00.000Z",
+    });
+  });
+
+  it("preserves structured business-error details", () => {
+    const json = jest.fn();
+    const status = jest.fn().mockReturnValue({ json });
+    const host = new ExecutionContextHost([{}, { status }]);
+
+    new AllExceptionsFilter().catch(
+      new BadRequestException({
+        message: "Medication release is blocked",
+        code: "OPD_RELEASE_BLOCKED",
+        details: {
+          blockers: [{ code: "LOT_SELECTION_REQUIRED" }],
+          totals: { netTotalAmount: 100 },
+        },
+      }),
+      host,
+    );
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({
+      status: "8999",
+      message: "Medication release is blocked",
+      code: "OPD_RELEASE_BLOCKED",
+      details: {
+        blockers: [{ code: "LOT_SELECTION_REQUIRED" }],
+        totals: { netTotalAmount: 100 },
+      },
     });
   });
 });

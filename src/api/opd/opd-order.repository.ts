@@ -111,6 +111,9 @@ export class OpdOrderRepository {
           orderBy: { display_order: "asc" },
           include: { medication_instruction: true },
         },
+        release: {
+          include: { prescription_link: true, sale_link: true },
+        },
       },
     });
   }

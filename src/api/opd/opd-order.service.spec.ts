@@ -202,7 +202,7 @@ describe("OpdOrderService", () => {
         page: 2,
         pageSize: 10,
         pricingPolicy: "catalog-snapshot-v1",
-        releaseAvailable: false,
+        releaseAvailable: true,
       }),
     );
     expect(result.items[0]).toEqual(

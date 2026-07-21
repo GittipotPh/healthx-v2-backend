@@ -798,40 +798,44 @@ export class QueueRepository {
 
   async hasUnpaidPrescriptions(
     opdId: string,
+    branchId: string,
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<boolean> {
     const prescriptions = await tx.prescription.findMany({
-      where: { opd_id: opdId },
+      where: { opd_id: opdId, branch_id: branchId },
       include: { sale_order: true },
     });
     if (prescriptions.length === 0) return false;
     return prescriptions.some(
-      (p) => p.sale_order && p.sale_order.sale_order_status !== "PAID",
+      (p) => !p.sale_order || p.sale_order.sale_order_status !== "PAID",
     );
   }
 
   async hasPrescriptions(
     opdId: string,
+    branchId: string,
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<boolean> {
     const count = await tx.prescription.count({
-      where: { opd_id: opdId },
+      where: { opd_id: opdId, branch_id: branchId },
     });
     return count > 0;
   }
 
   async hasUsedCourse(
     opdId: string,
+    branchId: string,
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<boolean> {
     const opd = await tx.opd.findFirst({
-      where: { opd_id: opdId },
+      where: { opd_id: opdId, branch_id: branchId },
       select: { management_item: true },
     });
     if (!opd || !opd.management_item) return false;
     const count = await tx.service_usage.count({
       where: {
         service_usage_id: opd.management_item,
+        branch_id: branchId,
         service_usage_status: "APPROVED",
       },
     });

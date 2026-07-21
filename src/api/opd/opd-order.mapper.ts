@@ -8,6 +8,9 @@ import {
 export type OpdOrderRecord = Prisma.opd_orderGetPayload<{
   include: {
     items: { include: { medication_instruction: true } };
+    release: {
+      include: { prescription_link: true; sale_link: true };
+    };
   };
 }>;
 
@@ -120,8 +123,8 @@ export class OpdClinicalCatalogListResult {
   @ApiProperty({ enum: ["catalog-snapshot-v1"] })
   pricingPolicy!: "catalog-snapshot-v1";
 
-  @ApiProperty({ default: false })
-  releaseAvailable!: false;
+  @ApiProperty()
+  releaseAvailable!: boolean;
 }
 
 export class OpdMedicationInstructionView {
@@ -254,8 +257,8 @@ export class OpdDraftOrderView {
   @ApiProperty()
   encounterId!: string;
 
-  @ApiProperty({ enum: ["DRAFT"] })
-  status!: "DRAFT";
+  @ApiProperty({ enum: ["DRAFT", "RELEASED", "VOIDED"] })
+  status!: "DRAFT" | "RELEASED" | "VOIDED";
 
   @ApiProperty({ enum: ["THB"] })
   currency!: "THB";
@@ -278,17 +281,55 @@ export class OpdDraftOrderView {
   @ApiProperty({ type: [OpdOrderItemView] })
   items!: OpdOrderItemView[];
 
-  @ApiProperty({ default: false })
-  releaseAvailable!: false;
-
   @ApiProperty()
-  releaseUnavailableReason!: string;
+  releaseAvailable!: boolean;
+
+  @ApiProperty({ type: String, nullable: true })
+  releaseUnavailableReason!: string | null;
+
+  @ApiProperty({ type: () => OpdOrderReleaseSummaryView, nullable: true })
+  release!: OpdOrderReleaseSummaryView | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  releasedBy!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  releasedAt!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  voidedBy!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  voidedAt!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  voidReason!: string | null;
 
   @ApiProperty()
   createdAt!: string;
 
   @ApiProperty()
   updatedAt!: string;
+}
+
+export class OpdOrderReleaseSummaryView {
+  @ApiProperty({ format: "uuid" })
+  releaseId!: string;
+
+  @ApiProperty()
+  prescriptionId!: string;
+
+  @ApiProperty()
+  saleOrderId!: string;
+
+  @ApiProperty()
+  prescriberUserId!: string;
+
+  @ApiProperty()
+  safetySnapshotHash!: string;
+
+  @ApiProperty()
+  releasedAt!: string;
 }
 
 export class OpdDraftOrderResult {
@@ -310,9 +351,11 @@ function decimalNumber(value: Prisma.Decimal | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function orderStatus(value: string): "DRAFT" {
-  if (value !== "DRAFT") throw new Error(`Unknown OPD order status: ${value}`);
-  return value;
+function orderStatus(value: string): "DRAFT" | "RELEASED" | "VOIDED" {
+  if (value === "DRAFT" || value === "RELEASED" || value === "VOIDED") {
+    return value;
+  }
+  throw new Error(`Unknown OPD order status: ${value}`);
 }
 
 function itemStatus(value: string): "ACTIVE" | "VOID" {
@@ -395,6 +438,17 @@ export function toOpdCatalogItemView(
 }
 
 export function toOpdDraftOrderView(row: OpdOrderRecord): OpdDraftOrderView {
+  const activeItemCount = row.items.filter(
+    (item) => item.status === "ACTIVE",
+  ).length;
+  const canStartRelease = row.status === "DRAFT" && activeItemCount > 0;
+  const release = row.release;
+  if (
+    release &&
+    (!release.prescription_link || !release.sale_link)
+  ) {
+    throw new Error("OPD order release is missing a durable downstream link");
+  }
   return {
     orderId: row.order_id,
     encounterId: row.encounter_id,
@@ -451,9 +505,30 @@ export function toOpdDraftOrderView(row: OpdOrderRecord): OpdDraftOrderView {
       createdAt: item.created_at.toISOString(),
       updatedAt: item.updated_at.toISOString(),
     })),
-    releaseAvailable: false,
-    releaseUnavailableReason:
-      "Order release and downstream commercial effects require a separately approved lifecycle",
+    releaseAvailable: canStartRelease,
+    releaseUnavailableReason: canStartRelease
+      ? null
+      : row.status === "DRAFT"
+        ? "At least one active medication item is required before preflight"
+        : row.status === "RELEASED"
+          ? "This order has already been released"
+          : "This released order has been voided and is immutable",
+    release:
+      release && release.prescription_link && release.sale_link
+        ? {
+            releaseId: release.release_id,
+            prescriptionId: release.prescription_link.legacy_prescribe_id,
+            saleOrderId: release.sale_link.legacy_sale_order_id,
+            prescriberUserId: release.prescriber_user_id,
+            safetySnapshotHash: release.safety_snapshot_hash,
+            releasedAt: release.released_at.toISOString(),
+          }
+        : null,
+    releasedBy: row.released_by,
+    releasedAt: row.released_at?.toISOString() ?? null,
+    voidedBy: row.voided_by,
+    voidedAt: row.voided_at?.toISOString() ?? null,
+    voidReason: row.void_reason,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };

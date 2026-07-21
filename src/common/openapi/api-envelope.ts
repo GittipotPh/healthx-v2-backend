@@ -48,6 +48,14 @@ export class ApiErrorEnvelope {
 
   @ApiPropertyOptional({ description: "Current server update timestamp" })
   updatedAt?: string;
+
+  @ApiPropertyOptional({
+    type: "object",
+    additionalProperties: true,
+    description:
+      "Structured business-error context such as release blockers or replacement totals",
+  })
+  details?: Record<string, unknown>;
 }
 
 export interface EnvelopeResponseOptions {

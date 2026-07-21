@@ -2679,26 +2679,33 @@ model opd_note_section {
   @@index([clinic_id, branch_id, encounter_id, section_code, status], map: "opd_note_section_encounter_idx")
 }
 
-// Phase 3A exposes one app-owned draft order set per encounter. Release and all
-// legacy prescription/sale/inventory/course effects remain deliberately absent.
+// Phase 3A creates one app-owned order per encounter. Phase 3B may transition
+// an eligible medication-only order to RELEASED and, before downstream
+// progression, VOIDED. Legacy identities remain scalar links below.
 model opd_order {
-  order_id              String           @id @default(uuid()) @db.Uuid
-  clinic_id             String           @db.VarChar(50)
-  branch_id             String           @db.VarChar(50)
-  encounter_id          String           @db.Uuid
-  status                String           @default("DRAFT") @db.VarChar(20)
-  currency              String           @default("THB") @db.VarChar(3)
-  subtotal_amount       Decimal          @default(0) @db.Decimal(14, 2)
-  discount_total_amount Decimal          @default(0) @db.Decimal(14, 2)
-  tax_total_amount      Decimal          @default(0) @db.Decimal(14, 2)
-  net_total_amount      Decimal          @default(0) @db.Decimal(14, 2)
-  version               Int              @default(1)
-  created_by            String           @db.VarChar(50)
-  updated_by            String           @db.VarChar(50)
-  created_at            DateTime         @default(now()) @db.Timestamptz(6)
-  updated_at            DateTime         @default(now()) @updatedAt @db.Timestamptz(6)
-  encounter             opd_encounter    @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_encounter_tenant_fkey")
+  order_id              String             @id @default(uuid()) @db.Uuid
+  clinic_id             String             @db.VarChar(50)
+  branch_id             String             @db.VarChar(50)
+  encounter_id          String             @db.Uuid
+  status                String             @default("DRAFT") @db.VarChar(20)
+  currency              String             @default("THB") @db.VarChar(3)
+  subtotal_amount       Decimal            @default(0) @db.Decimal(14, 2)
+  discount_total_amount Decimal            @default(0) @db.Decimal(14, 2)
+  tax_total_amount      Decimal            @default(0) @db.Decimal(14, 2)
+  net_total_amount      Decimal            @default(0) @db.Decimal(14, 2)
+  version               Int                @default(1)
+  released_by           String?            @db.VarChar(50)
+  released_at           DateTime?          @db.Timestamptz(6)
+  voided_by             String?            @db.VarChar(50)
+  voided_at             DateTime?          @db.Timestamptz(6)
+  void_reason           String?            @db.VarChar(500)
+  created_by            String             @db.VarChar(50)
+  updated_by            String             @db.VarChar(50)
+  created_at            DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+  encounter             opd_encounter      @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_encounter_tenant_fkey")
   items                 opd_order_item[]
+  release               opd_order_release?
 
   @@unique([order_id, clinic_id, branch_id, encounter_id], map: "opd_order_identity_uq")
   @@unique([encounter_id, clinic_id, branch_id], map: "opd_order_encounter_uq")
@@ -2742,6 +2749,7 @@ model opd_order_item {
   updated_at             DateTime                    @default(now()) @updatedAt @db.Timestamptz(6)
   order                  opd_order                   @relation(fields: [order_id, clinic_id, branch_id, encounter_id], references: [order_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_item_order_identity_fkey")
   medication_instruction opd_medication_instruction?
+  release_items          opd_order_release_item[]
 
   @@unique([order_item_id, clinic_id, branch_id, encounter_id, order_id], map: "opd_order_item_identity_uq")
   @@unique([order_id, display_order], map: "opd_order_item_display_order_uq")
@@ -2773,6 +2781,142 @@ model opd_medication_instruction {
   @@unique([medication_instruction_id, clinic_id, branch_id, encounter_id, order_id, order_item_id], map: "opd_medication_instruction_identity_uq")
   @@unique([order_item_id, clinic_id, branch_id, encounter_id, order_id], map: "opd_medication_instruction_item_uq")
   @@index([clinic_id, branch_id, encounter_id, order_id], map: "opd_medication_instruction_scope_idx")
+}
+
+// Immutable commercial-release header. The hashes retain command/safety
+// evidence without storing the idempotency key or duplicating allergy text.
+// Prescriber and downstream HealthX identities are scalar strings, not legacy
+// relations.
+model opd_order_release {
+  release_id                String                       @id @default(uuid()) @db.Uuid
+  clinic_id                 String                       @db.VarChar(50)
+  branch_id                 String                       @db.VarChar(50)
+  encounter_id              String                       @db.Uuid
+  order_id                  String                       @db.Uuid
+  request_hash              String                       @db.VarChar(64)
+  idempotency_key_hash      String                       @db.VarChar(64)
+  source_order_version      Int
+  result_order_version      Int
+  item_version_manifest     Json
+  currency                  String                       @default("THB") @db.VarChar(3)
+  subtotal_amount           Decimal                      @db.Decimal(14, 2)
+  promotion_discount_amount Decimal                      @db.Decimal(14, 2)
+  tax_amount                Decimal                      @default(0) @db.Decimal(14, 2)
+  net_total_amount          Decimal                      @db.Decimal(14, 2)
+  pricing_policy            String                       @db.VarChar(50)
+  tax_policy                String                       @db.VarChar(50)
+  safety_source             String                       @db.VarChar(50)
+  safety_snapshot_hash      String                       @db.VarChar(64)
+  safety_acknowledged_by    String                       @db.VarChar(50)
+  safety_acknowledged_at    DateTime                     @db.Timestamptz(6)
+  prescriber_user_id        String                       @db.VarChar(50)
+  released_by               String                       @db.VarChar(50)
+  released_at               DateTime                     @db.Timestamptz(6)
+  created_at                DateTime                     @default(now()) @db.Timestamptz(6)
+  order                     opd_order                    @relation(fields: [order_id, clinic_id, branch_id, encounter_id], references: [order_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_release_order_identity_fkey")
+  items                     opd_order_release_item[]
+  prescription_link         opd_order_prescription_link?
+  sale_link                 opd_order_sale_link?
+
+  @@unique([release_id, clinic_id, branch_id, encounter_id, order_id], map: "opd_order_release_identity_uq")
+  @@unique([order_id, clinic_id, branch_id, encounter_id], map: "opd_order_release_order_uq")
+  @@index([clinic_id, branch_id, encounter_id, released_at], map: "opd_order_release_scope_idx")
+}
+
+// Frozen medication/pricing/SIG/lot/expiry/observed-stock snapshot used by
+// both legacy downstream item sets. It never reserves or decrements stock.
+model opd_order_release_item {
+  release_item_id             String            @id @default(uuid()) @db.Uuid
+  clinic_id                   String            @db.VarChar(50)
+  branch_id                   String            @db.VarChar(50)
+  encounter_id                String            @db.Uuid
+  order_id                    String            @db.Uuid
+  release_id                  String            @db.Uuid
+  order_item_id               String            @db.Uuid
+  legacy_prescription_item_id String            @db.VarChar(50)
+  legacy_sale_order_item_id   String            @db.VarChar(50)
+  display_order               Int
+  source_type                 String            @db.VarChar(20)
+  source_id                   String            @db.VarChar(50)
+  source_code                 String            @db.VarChar(50)
+  category                    String            @db.VarChar(30)
+  name_snapshot               String            @db.VarChar(300)
+  unit_snapshot               String            @db.VarChar(250)
+  quantity                    Decimal           @db.Decimal(10, 2)
+  base_unit_price_amount      Decimal           @db.Decimal(14, 2)
+  unit_price_amount           Decimal           @db.Decimal(14, 2)
+  pricing_source              String            @db.VarChar(20)
+  gross_amount                Decimal           @db.Decimal(14, 2)
+  discount_amount             Decimal           @db.Decimal(14, 2)
+  tax_type                    String            @db.VarChar(30)
+  tax_amount                  Decimal           @default(0) @db.Decimal(14, 2)
+  net_amount                  Decimal           @db.Decimal(14, 2)
+  order_item_note             String?           @db.VarChar(2000)
+  dose                        String?           @db.VarChar(100)
+  route                       String?           @db.VarChar(100)
+  frequency                   String?           @db.VarChar(200)
+  timing                      String?           @db.VarChar(200)
+  duration_value              Decimal?          @db.Decimal(10, 2)
+  duration_unit               String?           @db.VarChar(30)
+  sig_text                    String            @db.VarChar(1000)
+  medication_note             String?           @db.VarChar(2000)
+  lot_id                      String            @db.VarChar(50)
+  expiry_at                   DateTime          @db.Timestamp(6)
+  stock_observed_quantity     Decimal           @db.Decimal(10, 2)
+  stock_observed_at           DateTime          @db.Timestamptz(6)
+  created_at                  DateTime          @default(now()) @db.Timestamptz(6)
+  release                     opd_order_release @relation(fields: [release_id, clinic_id, branch_id, encounter_id, order_id], references: [release_id, clinic_id, branch_id, encounter_id, order_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_release_item_release_identity_fkey")
+  order_item                  opd_order_item    @relation(fields: [order_item_id, clinic_id, branch_id, encounter_id, order_id], references: [order_item_id, clinic_id, branch_id, encounter_id, order_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_release_item_order_item_identity_fkey")
+
+  @@unique([release_item_id, clinic_id, branch_id, encounter_id, order_id, release_id], map: "opd_order_release_item_identity_uq")
+  @@unique([release_id, order_item_id, clinic_id, branch_id, encounter_id, order_id], map: "opd_order_release_item_order_item_uq")
+  @@unique([release_id, display_order], map: "opd_order_release_item_display_order_uq")
+  @@unique([legacy_prescription_item_id], map: "opd_order_release_item_prescription_item_uq")
+  @@unique([legacy_sale_order_item_id], map: "opd_order_release_item_sale_item_uq")
+  @@index([branch_id, source_id, lot_id, expiry_at], map: "opd_order_release_item_lot_idx")
+}
+
+// Complete scoped identity for the app-created legacy prescription. No FK or
+// Prisma relation points at the HealthX-owned prescription table.
+model opd_order_prescription_link {
+  prescription_link_id         String            @id @default(uuid()) @db.Uuid
+  clinic_id                    String            @db.VarChar(50)
+  branch_id                    String            @db.VarChar(50)
+  encounter_id                 String            @db.Uuid
+  order_id                     String            @db.Uuid
+  release_id                   String            @db.Uuid
+  legacy_prescribe_id          String            @db.VarChar(50)
+  legacy_opd_id                String            @db.VarChar(50)
+  customer_id                  String            @db.VarChar(50)
+  prescription_status_snapshot String            @default("WAITING") @db.VarChar(20)
+  created_at                   DateTime          @default(now()) @db.Timestamptz(6)
+  release                      opd_order_release @relation(fields: [release_id, clinic_id, branch_id, encounter_id, order_id], references: [release_id, clinic_id, branch_id, encounter_id, order_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_prescription_link_release_identity_fkey")
+
+  @@unique([prescription_link_id, clinic_id, branch_id, encounter_id, order_id, release_id], map: "opd_order_prescription_link_identity_uq")
+  @@unique([release_id, clinic_id, branch_id, encounter_id, order_id], map: "opd_order_prescription_link_release_uq")
+  @@unique([branch_id, legacy_prescribe_id], map: "opd_order_prescription_link_legacy_uq")
+  @@index([clinic_id, branch_id, legacy_opd_id], map: "opd_order_prescription_link_legacy_opd_idx")
+}
+
+// Complete scoped identity for the app-created legacy sale order. No FK or
+// Prisma relation points at the HealthX-owned sale_order table.
+model opd_order_sale_link {
+  sale_link_id               String            @id @default(uuid()) @db.Uuid
+  clinic_id                  String            @db.VarChar(50)
+  branch_id                  String            @db.VarChar(50)
+  encounter_id               String            @db.Uuid
+  order_id                   String            @db.Uuid
+  release_id                 String            @db.Uuid
+  legacy_sale_order_id       String            @db.VarChar(50)
+  customer_id                String            @db.VarChar(50)
+  sale_order_status_snapshot String            @default("PENDING") @db.VarChar(20)
+  created_at                 DateTime          @default(now()) @db.Timestamptz(6)
+  release                    opd_order_release @relation(fields: [release_id, clinic_id, branch_id, encounter_id, order_id], references: [release_id, clinic_id, branch_id, encounter_id, order_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_sale_link_release_identity_fkey")
+
+  @@unique([sale_link_id, clinic_id, branch_id, encounter_id, order_id, release_id], map: "opd_order_sale_link_identity_uq")
+  @@unique([release_id, clinic_id, branch_id, encounter_id, order_id], map: "opd_order_sale_link_release_uq")
+  @@unique([branch_id, legacy_sale_order_id], map: "opd_order_sale_link_legacy_uq")
+  @@index([clinic_id, branch_id, customer_id, created_at], map: "opd_order_sale_link_scope_idx")
 }
 
 enum auditReferenceType {
