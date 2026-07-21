@@ -28,6 +28,7 @@ export interface DraftResourceVersionState {
   manifest: Prisma.InputJsonObject;
   examination: DraftResourceVersion | null;
   vitals: DraftResourceVersion | null;
+  intake: DraftResourceVersion | null;
   symptoms: DraftResourceVersion | null;
   diagnoses: DraftResourceVersion | null;
   noteWorkspace: DraftResourceVersion | null;
@@ -282,7 +283,7 @@ export class OpdClinicalSectionRepository {
         branch_id: scope.branchId,
         status: "DRAFT",
       },
-      include: { vital_observation: true, symptom_section: true },
+      include: { vital_observation: true, intake: true, symptom_section: true },
       orderBy: { examination_number: "desc" },
     });
     const diagnosis = await tx.opd_diagnosis_section.findFirst({
@@ -314,6 +315,14 @@ export class OpdClinicalSectionRepository {
                   vitals: {
                     id: examination.vital_observation.vital_observation_id,
                     version: examination.vital_observation.version,
+                  },
+                }
+              : {}),
+            ...(examination.intake
+              ? {
+                  intake: {
+                    id: examination.intake.intake_id,
+                    version: examination.intake.version,
                   },
                 }
               : {}),
@@ -366,6 +375,14 @@ export class OpdClinicalSectionRepository {
             version: examination.vital_observation.version,
             status: examination.status,
             updatedAt: examination.vital_observation.updated_at,
+          }
+        : null,
+      intake: examination?.intake
+        ? {
+            id: examination.intake.intake_id,
+            version: examination.intake.version,
+            status: examination.status,
+            updatedAt: examination.intake.updated_at,
           }
         : null,
       symptoms: examination?.symptom_section

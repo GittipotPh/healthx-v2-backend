@@ -5,6 +5,7 @@ import {
   OpdSymptomSectionView,
   toOpdSymptomSectionView,
 } from "./opd-clinical-section.mapper";
+import { OpdIntakeView, toOpdIntakeView } from "./opd-clinical-intake.mapper";
 import {
   OpdExaminationView,
   toOpdExaminationView,
@@ -13,6 +14,7 @@ import {
 export type OpdExaminationHistoryRecord = Prisma.opd_examinationGetPayload<{
   include: {
     vital_observation: true;
+    intake: true;
     symptom_section: {
       include: {
         symptoms: { include: { associations: true } };
@@ -83,6 +85,9 @@ export class OpdExaminationHistoryItemView {
 
   @ApiProperty({ type: OpdSymptomSectionView, nullable: true })
   symptoms!: OpdSymptomSectionView | null;
+
+  @ApiProperty({ type: OpdIntakeView, nullable: true })
+  intake!: OpdIntakeView | null;
 }
 
 export class OpdExaminationHistoryListResult {
@@ -207,6 +212,7 @@ export function toOpdExaminationHistoryItemView(
     symptoms: row.symptom_section
       ? toOpdSymptomSectionView(row.symptom_section)
       : null,
+    intake: row.intake ? toOpdIntakeView(row.intake, row.examination_id) : null,
   };
 }
 

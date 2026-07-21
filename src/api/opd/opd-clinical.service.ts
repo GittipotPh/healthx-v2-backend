@@ -29,6 +29,7 @@ import {
   type OpdExaminationRecord,
   toOpdExaminationView,
 } from "./opd-clinical.mapper";
+import { OpdClinicalIntakeRepository } from "./opd-clinical-intake.repository";
 import { OpdClinicalRepository } from "./opd-clinical.repository";
 import { OpdClinicalSectionRepository } from "./opd-clinical-section.repository";
 
@@ -56,6 +57,8 @@ interface FinalizeSnapshot {
   examinationId: string;
   examinationVersion: number;
   vitalVersion: number;
+  intakeId?: string;
+  intakeVersion?: number;
   symptomSectionId?: string;
   symptomVersion?: number;
   supersededExaminationId?: string;
@@ -73,6 +76,7 @@ interface CorrectionSnapshot {
 export class OpdClinicalService {
   constructor(
     private readonly repository: OpdClinicalRepository,
+    private readonly intakeRepository: OpdClinicalIntakeRepository,
     private readonly sectionRepository: OpdClinicalSectionRepository,
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
@@ -290,6 +294,9 @@ export class OpdClinicalService {
           sourceExaminationId,
           expectedExaminationVersion: dto.expectedExaminationVersion,
           expectedVitalVersion: dto.expectedVitalVersion,
+          ...(dto.expectedIntakeVersion !== undefined
+            ? { expectedIntakeVersion: dto.expectedIntakeVersion }
+            : {}),
           ...(dto.expectedSymptomVersion !== undefined
             ? { expectedSymptomVersion: dto.expectedSymptomVersion }
             : {}),
@@ -370,6 +377,17 @@ export class OpdClinicalService {
         if (sourceVitals.version !== dto.expectedVitalVersion) {
           this.throwVitalVersionConflict(source);
         }
+        const sourceIntake = await this.intakeRepository.findIntake(
+          encounterId,
+          sourceExaminationId,
+          scope,
+          tx,
+        );
+        this.assertExpectedIntakeVersion(
+          sourceIntake,
+          dto.expectedIntakeVersion,
+          source.status,
+        );
         const sourceSymptoms = await this.sectionRepository.findSymptomSection(
           encounterId,
           sourceExaminationId,
@@ -413,6 +431,7 @@ export class OpdClinicalService {
           source.corrects_examination_id ?? source.examination_id;
         const created = await this.repository.createCorrectionExamination(
           source,
+          sourceIntake,
           sourceSymptoms,
           examinationNumber,
           correctionRootExaminationId,
@@ -438,6 +457,12 @@ export class OpdClinicalService {
               sourceExaminationId,
               sourceExaminationVersion: source.version,
               sourceVitalVersion: sourceVitals.version,
+              ...(sourceIntake
+                ? {
+                    sourceIntakeId: sourceIntake.intake_id,
+                    sourceIntakeVersion: sourceIntake.version,
+                  }
+                : {}),
               ...(sourceSymptoms
                 ? {
                     sourceSymptomSectionId: sourceSymptoms.symptom_section_id,
@@ -511,6 +536,9 @@ export class OpdClinicalService {
           examinationId,
           expectedExaminationVersion: dto.expectedExaminationVersion,
           expectedVitalVersion: dto.expectedVitalVersion,
+          ...(dto.expectedIntakeVersion !== undefined
+            ? { expectedIntakeVersion: dto.expectedIntakeVersion }
+            : {}),
           ...(dto.expectedSymptomVersion !== undefined
             ? { expectedSymptomVersion: dto.expectedSymptomVersion }
             : {}),
@@ -584,6 +612,17 @@ export class OpdClinicalService {
         if (vitals.version !== dto.expectedVitalVersion) {
           this.throwVitalVersionConflict(examination);
         }
+        const intake = await this.intakeRepository.findIntake(
+          encounterId,
+          examinationId,
+          scope,
+          tx,
+        );
+        this.assertExpectedIntakeVersion(
+          intake,
+          dto.expectedIntakeVersion,
+          examination.status,
+        );
         const symptoms = await this.sectionRepository.findSymptomSection(
           encounterId,
           examinationId,
@@ -691,6 +730,12 @@ export class OpdClinicalService {
               previousVersion: dto.expectedExaminationVersion,
               resultVersion: dto.expectedExaminationVersion + 1,
               vitalVersion: vitals.version,
+              ...(intake
+                ? {
+                    intakeId: intake.intake_id,
+                    intakeVersion: intake.version,
+                  }
+                : {}),
               ...(symptoms
                 ? {
                     symptomSectionId: symptoms.symptom_section_id,
@@ -715,6 +760,12 @@ export class OpdClinicalService {
           examinationId,
           examinationVersion: dto.expectedExaminationVersion + 1,
           vitalVersion: vitals.version,
+          ...(intake
+            ? {
+                intakeId: intake.intake_id,
+                intakeVersion: intake.version,
+              }
+            : {}),
           ...(symptoms
             ? {
                 symptomSectionId: symptoms.symptom_section_id,
@@ -937,6 +988,22 @@ export class OpdClinicalService {
         "Stored finalization result no longer matches the resource",
       );
     }
+    if (snapshot.intakeVersion !== undefined) {
+      const intake = await this.intakeRepository.findIntake(
+        encounterId,
+        examinationId,
+        scope,
+      );
+      if (
+        !intake ||
+        intake.intake_id !== snapshot.intakeId ||
+        intake.version !== snapshot.intakeVersion
+      ) {
+        throw new ConflictException(
+          "Stored finalization result no longer matches the intake section",
+        );
+      }
+    }
     if (snapshot.symptomVersion !== undefined) {
       const symptoms = await this.sectionRepository.findSymptomSection(
         encounterId,
@@ -980,6 +1047,8 @@ export class OpdClinicalService {
     const examinationId = value.examinationId;
     const examinationVersion = value.examinationVersion;
     const vitalVersion = value.vitalVersion;
+    const intakeId = value.intakeId;
+    const intakeVersion = value.intakeVersion;
     const symptomSectionId = value.symptomSectionId;
     const symptomVersion = value.symptomVersion;
     const supersededExaminationId = value.supersededExaminationId;
@@ -996,6 +1065,10 @@ export class OpdClinicalService {
     if (
       (symptomSectionId !== undefined &&
         typeof symptomSectionId !== "string") ||
+      (intakeId !== undefined && typeof intakeId !== "string") ||
+      (intakeVersion !== undefined && typeof intakeVersion !== "number") ||
+      (intakeVersion !== undefined && intakeId === undefined) ||
+      (intakeId !== undefined && intakeVersion === undefined) ||
       (symptomVersion !== undefined && typeof symptomVersion !== "number") ||
       (symptomVersion !== undefined && symptomSectionId === undefined) ||
       (symptomSectionId !== undefined && symptomVersion === undefined) ||
@@ -1014,6 +1087,9 @@ export class OpdClinicalService {
       examinationId,
       examinationVersion,
       vitalVersion,
+      ...(intakeId !== undefined && intakeVersion !== undefined
+        ? { intakeId, intakeVersion }
+        : {}),
       ...(symptomSectionId !== undefined && symptomVersion !== undefined
         ? { symptomSectionId, symptomVersion }
         : {}),
@@ -1065,6 +1141,31 @@ export class OpdClinicalService {
     } else if (expectedVersion !== undefined) {
       throw new BadRequestException(
         "The examination does not have a symptom section",
+      );
+    }
+  }
+
+  private assertExpectedIntakeVersion(
+    intake: {
+      intake_id: string;
+      version: number;
+      updated_at: Date;
+    } | null,
+    expectedVersion: number | undefined,
+    examinationStatus: string,
+  ): void {
+    if (intake) {
+      if (expectedVersion === undefined) {
+        throw new BadRequestException(
+          "expectedIntakeVersion is required when the examination has intake data",
+        );
+      }
+      if (intake.version !== expectedVersion) {
+        this.throwIntakeVersionConflict(intake, examinationStatus);
+      }
+    } else if (expectedVersion !== undefined) {
+      throw new BadRequestException(
+        "The examination does not have an intake section",
       );
     }
   }
@@ -1125,6 +1226,23 @@ export class OpdClinicalService {
       currentVersion: section.version,
       currentStatus,
       updatedAt: section.updated_at.toISOString(),
+    });
+  }
+
+  private throwIntakeVersionConflict(
+    intake: {
+      intake_id: string;
+      version: number;
+      updated_at: Date;
+    },
+    currentStatus = "DRAFT",
+  ): never {
+    throw new VersionConflictException({
+      resourceType: "OPD_INTAKE",
+      resourceId: intake.intake_id,
+      currentVersion: intake.version,
+      currentStatus,
+      updatedAt: intake.updated_at.toISOString(),
     });
   }
 

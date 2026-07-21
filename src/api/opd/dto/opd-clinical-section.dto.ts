@@ -239,6 +239,12 @@ export class OpdDraftExpectedVersionsDto {
   @IsOptional()
   @ValidateNested()
   @Type(() => OpdExpectedResourceVersionDto)
+  intake?: OpdExpectedResourceVersionDto;
+
+  @ApiPropertyOptional({ type: OpdExpectedResourceVersionDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => OpdExpectedResourceVersionDto)
   symptoms?: OpdExpectedResourceVersionDto;
 
   @ApiPropertyOptional({ type: OpdExpectedResourceVersionDto })

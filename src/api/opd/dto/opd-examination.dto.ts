@@ -173,6 +173,12 @@ export class FinalizeOpdExaminationDto {
   @IsOptional()
   @IsInt()
   @Min(1)
+  expectedIntakeVersion?: number;
+
+  @ApiPropertyOptional({ minimum: 1 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
   expectedSymptomVersion?: number;
 }
 
@@ -186,6 +192,12 @@ export class CreateOpdExaminationCorrectionDto {
   @IsInt()
   @Min(1)
   expectedVitalVersion!: number;
+
+  @ApiPropertyOptional({ minimum: 1 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedIntakeVersion?: number;
 
   @ApiPropertyOptional({ minimum: 1 })
   @IsOptional()

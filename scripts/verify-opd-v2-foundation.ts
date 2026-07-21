@@ -28,6 +28,7 @@ async function main(): Promise<void> {
       async (tx) => {
         const ticketCount = await tx.opd_queue_ticket.count();
         const encounterCount = await tx.opd_encounter.count();
+        const intakeCount = await tx.opd_intake.count();
         const candidateCounts = await tx.$queryRaw<BackfillCandidateCountRow[]>(
           Prisma.sql`
           WITH candidate AS (
@@ -293,6 +294,42 @@ async function main(): Promise<void> {
                OR CHAR_LENGTH(section.plain_text) > 50000
           ) AS mismatch
         `);
+        const intakeIntegrityMismatches = await tx.$queryRaw<CountRow[]>(
+          Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM opd_intake AS intake
+          LEFT JOIN opd_examination AS examination
+            ON examination.examination_id = intake.examination_id
+           AND examination.encounter_id = intake.encounter_id
+           AND examination.clinic_id = intake.clinic_id
+           AND examination.branch_id = intake.branch_id
+          WHERE examination.examination_id IS NULL
+             OR intake.urinary_status NOT IN (
+               'NORMAL', 'DYSURIA', 'FREQUENCY', 'RETENTION', 'OTHER'
+             )
+             OR intake.bowel_status NOT IN (
+               'NORMAL', 'CONSTIPATION', 'DIARRHEA',
+               'NO_BOWEL_MOVEMENT', 'OTHER'
+             )
+             OR (
+               intake.urinary_status = 'OTHER'
+               AND NULLIF(BTRIM(intake.urinary_other_text), '') IS NULL
+             )
+             OR (
+               intake.urinary_status <> 'OTHER'
+               AND intake.urinary_other_text IS NOT NULL
+             )
+             OR (
+               intake.bowel_status = 'OTHER'
+               AND NULLIF(BTRIM(intake.bowel_other_text), '') IS NULL
+             )
+             OR (
+               intake.bowel_status <> 'OTHER'
+               AND intake.bowel_other_text IS NOT NULL
+             )
+             OR intake.version < 1
+        `,
+        );
         const unsafeLegacyOpdNumbers = await tx.$queryRaw<
           CountRow[]
         >(Prisma.sql`
@@ -395,6 +432,7 @@ async function main(): Promise<void> {
         return {
           queueTickets: ticketCount,
           encounters: encounterCount,
+          intakeRows: intakeCount,
           validLegacyPairsMissingTicket: Number(
             candidateCounts[0]?.valid_missing ?? 0n,
           ),
@@ -425,6 +463,9 @@ async function main(): Promise<void> {
           ),
           clinicalNoteIntegrityMismatches: Number(
             clinicalNoteIntegrityMismatches[0]?.count ?? 0n,
+          ),
+          intakeIntegrityMismatches: Number(
+            intakeIntegrityMismatches[0]?.count ?? 0n,
           ),
           unsafeLegacyOpdNumbers: Number(
             unsafeLegacyOpdNumbers[0]?.count ?? 0n,
@@ -464,6 +505,7 @@ async function main(): Promise<void> {
       report.missingCorrectionPermission > 0 ||
       report.correctionChainMismatches > 0 ||
       report.clinicalNoteIntegrityMismatches > 0 ||
+      report.intakeIntegrityMismatches > 0 ||
       report.unsafeLegacyOpdNumbers > 0 ||
       report.duplicateActiveDailyWalkIns > 0 ||
       report.missingActiveWalkInUniquenessIndex > 0 ||

@@ -528,6 +528,11 @@ export class OpdClinicalSectionService {
       current.vitals,
     );
     this.assertExpectedDraftResource(
+      "OPD_INTAKE",
+      expected.intake,
+      current.intake,
+    );
+    this.assertExpectedDraftResource(
       "OPD_SYMPTOM_SECTION",
       expected.symptoms,
       current.symptoms,

@@ -14,6 +14,8 @@ import { OpdClinicalSectionService } from "./opd-clinical-section.service";
 import { OpdClinicalHistoryController } from "./opd-clinical-history.controller";
 import { OpdClinicalHistoryRepository } from "./opd-clinical-history.repository";
 import { OpdClinicalHistoryService } from "./opd-clinical-history.service";
+import { OpdClinicalIntakeRepository } from "./opd-clinical-intake.repository";
+import { OpdClinicalIntakeService } from "./opd-clinical-intake.service";
 import { OpdClinicalNoteController } from "./opd-clinical-note.controller";
 import { OpdClinicalNoteRepository } from "./opd-clinical-note.repository";
 import { OpdClinicalNoteService } from "./opd-clinical-note.service";
@@ -36,6 +38,8 @@ import { OpdClinicalNoteService } from "./opd-clinical-note.service";
     OpdClinicalSectionRepository,
     OpdClinicalHistoryService,
     OpdClinicalHistoryRepository,
+    OpdClinicalIntakeService,
+    OpdClinicalIntakeRepository,
     OpdClinicalNoteService,
     OpdClinicalNoteRepository,
     OpdV2EnabledGuard,

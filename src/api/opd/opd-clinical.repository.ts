@@ -3,6 +3,7 @@ import {
   Prisma,
   type api_idempotency,
   type opd_encounter,
+  type opd_intake,
 } from "@prisma/client";
 import type { RequestScope } from "../../auth/auth.types";
 import { PrismaService } from "../../prisma.service";
@@ -229,6 +230,7 @@ export class OpdClinicalRepository {
 
   async createCorrectionExamination(
     source: OpdExaminationRecord,
+    intake: opd_intake | null,
     symptoms: OpdSymptomSectionRecord | null,
     examinationNumber: number,
     correctionRootExaminationId: string,
@@ -292,6 +294,26 @@ export class OpdClinicalRepository {
         updated_at: now,
       },
     });
+
+    if (intake) {
+      await tx.opd_intake.create({
+        data: {
+          clinic_id: scope.clinicId,
+          branch_id: scope.branchId,
+          encounter_id: source.encounter_id,
+          examination_id: examination.examination_id,
+          urinary_status: intake.urinary_status,
+          urinary_other_text: intake.urinary_other_text,
+          bowel_status: intake.bowel_status,
+          bowel_other_text: intake.bowel_other_text,
+          version: 1,
+          created_by: scope.userId,
+          updated_by: scope.userId,
+          created_at: now,
+          updated_at: now,
+        },
+      });
+    }
 
     if (symptoms) {
       await tx.opd_symptom_section.create({

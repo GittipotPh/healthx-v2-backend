@@ -25,6 +25,9 @@ import {
   PatchOpdVitalObservationDto,
   QueryOpdExaminationsDto,
 } from "./dto/opd-examination.dto";
+import { PatchOpdIntakeDto } from "./dto/opd-intake.dto";
+import { OpdIntakeView } from "./opd-clinical-intake.mapper";
+import { OpdClinicalIntakeService } from "./opd-clinical-intake.service";
 import {
   CreateOpdExaminationCorrectionResult,
   CreateOpdExaminationResult,
@@ -39,7 +42,10 @@ import { OpdV2EnabledGuard } from "./opd-v2-enabled.guard";
 @UseGuards(OpdV2EnabledGuard)
 @Controller("clinic/opd")
 export class OpdClinicalController {
-  constructor(private readonly clinicalService: OpdClinicalService) {}
+  constructor(
+    private readonly clinicalService: OpdClinicalService,
+    private readonly intakeService: OpdClinicalIntakeService,
+  ) {}
 
   @Get(":encounterId/examinations")
   @RequirePermissions("OPD_READ")
@@ -96,6 +102,40 @@ export class OpdClinicalController {
     @CurrentPrincipal() principal: Principal,
   ): Promise<OpdExaminationView> {
     return this.clinicalService.patchVitals(
+      encounterId,
+      examinationId,
+      dto,
+      scope,
+      principal,
+    );
+  }
+
+  @Get(":encounterId/examinations/:examinationId/intake")
+  @RequirePermissions("OPD_READ")
+  @ApiParam({ name: "encounterId", format: "uuid" })
+  @ApiParam({ name: "examinationId", format: "uuid" })
+  @BaseOpenApiResponse(OpdIntakeView)
+  intake(
+    @Param("encounterId", new ParseUUIDPipe()) encounterId: string,
+    @Param("examinationId", new ParseUUIDPipe()) examinationId: string,
+    @Scope() scope: RequestScope,
+  ): Promise<OpdIntakeView> {
+    return this.intakeService.intake(encounterId, examinationId, scope);
+  }
+
+  @Patch(":encounterId/examinations/:examinationId/intake")
+  @RequirePermissions("OPD_EDIT")
+  @ApiParam({ name: "encounterId", format: "uuid" })
+  @ApiParam({ name: "examinationId", format: "uuid" })
+  @BaseOpenApiResponse(OpdIntakeView)
+  patchIntake(
+    @Param("encounterId", new ParseUUIDPipe()) encounterId: string,
+    @Param("examinationId", new ParseUUIDPipe()) examinationId: string,
+    @Body() dto: PatchOpdIntakeDto,
+    @Scope() scope: RequestScope,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<OpdIntakeView> {
+    return this.intakeService.patchIntake(
       encounterId,
       examinationId,
       dto,

@@ -2450,6 +2450,7 @@ model opd_examination {
   superseded_examination    opd_examination?       @relation("OpdExaminationSupersedes", fields: [supersedes_examination_id, clinic_id, branch_id, encounter_id], references: [examination_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_examination_supersedes_identity_fkey")
   superseding_examination   opd_examination?       @relation("OpdExaminationSupersedes")
   vital_observation         opd_vital_observation?
+  intake                    opd_intake?
   symptom_section           opd_symptom_section?
 
   @@unique([examination_id, clinic_id, branch_id], map: "opd_examination_tenant_uq")
@@ -2492,6 +2493,30 @@ model opd_vital_observation {
   @@unique([examination_id, clinic_id, branch_id], map: "opd_vital_observation_examination_uq")
   @@unique([examination_id, clinic_id, branch_id, encounter_id], map: "opd_vital_observation_identity_uq")
   @@index([clinic_id, branch_id, encounter_id, examination_id], map: "opd_vital_observation_encounter_idx")
+}
+
+// Independently versioned Phase 2F intake section. SL and free-floating
+// laterality are deliberately absent; symptom laterality remains canonical.
+model opd_intake {
+  intake_id          String          @id @default(uuid()) @db.Uuid
+  clinic_id          String          @db.VarChar(50)
+  branch_id          String          @db.VarChar(50)
+  encounter_id       String          @db.Uuid
+  examination_id     String          @db.Uuid
+  urinary_status     String          @db.VarChar(30)
+  urinary_other_text String?         @db.VarChar(500)
+  bowel_status       String          @db.VarChar(30)
+  bowel_other_text   String?         @db.VarChar(500)
+  version            Int             @default(1)
+  created_by         String          @db.VarChar(50)
+  updated_by         String          @db.VarChar(50)
+  created_at         DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  examination        opd_examination @relation(fields: [examination_id, clinic_id, branch_id, encounter_id], references: [examination_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_intake_examination_identity_fkey")
+
+  @@unique([intake_id, clinic_id, branch_id, encounter_id], map: "opd_intake_identity_uq")
+  @@unique([examination_id, clinic_id, branch_id, encounter_id], map: "opd_intake_examination_uq")
+  @@index([clinic_id, branch_id, encounter_id, examination_id], map: "opd_intake_encounter_idx")
 }
 
 // Independently versioned symptom section. The examination-level patient quote

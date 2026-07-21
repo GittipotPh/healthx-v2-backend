@@ -55,6 +55,7 @@ export class OpdClinicalHistoryRepository {
         where,
         include: {
           vital_observation: true,
+          intake: true,
           symptom_section: {
             include: {
               symptoms: {
@@ -112,6 +113,7 @@ export class OpdClinicalHistoryRepository {
       },
       include: {
         vital_observation: true,
+        intake: true,
         symptom_section: {
           include: {
             symptoms: {

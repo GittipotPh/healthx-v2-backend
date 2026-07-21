@@ -101,6 +101,22 @@ const HISTORY_ROW = {
   created_at: MEASURED_AT,
   updated_at: MEASURED_AT,
   vital_observation: VITAL,
+  intake: {
+    intake_id: "77777777-7777-4777-8777-777777777777",
+    clinic_id: SCOPE.clinicId,
+    branch_id: SCOPE.branchId,
+    encounter_id: VITAL.encounter_id,
+    examination_id: VITAL.examination_id,
+    urinary_status: "FREQUENCY",
+    urinary_other_text: null,
+    bowel_status: "OTHER",
+    bowel_other_text: "Alternating pattern",
+    version: 2,
+    created_by: "user-1",
+    updated_by: "user-1",
+    created_at: MEASURED_AT,
+    updated_at: MEASURED_AT,
+  },
   symptom_section: SYMPTOM_SECTION,
   encounter: {
     customer_id: "customer-1",
@@ -175,6 +191,12 @@ describe("OpdClinicalHistoryService", () => {
         symptoms: expect.objectContaining({
           patientQuote: "Headache since yesterday",
           items: [expect.objectContaining({ mainText: "Headache" })],
+        }),
+        intake: expect.objectContaining({
+          urinaryStatus: "FREQUENCY",
+          bowelStatus: "OTHER",
+          bowelOtherText: "Alternating pattern",
+          version: 2,
         }),
       }),
     );

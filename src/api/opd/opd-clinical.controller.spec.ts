@@ -5,7 +5,9 @@ import {
   REQUIRED_PERMISSIONS_KEY,
   type PermissionRequirement,
 } from "../../auth/permissions.decorator";
+import { OpdBowelStatus, OpdUrinaryStatus } from "./dto/opd-intake.dto";
 import { OpdClinicalController } from "./opd-clinical.controller";
+import { OpdClinicalIntakeService } from "./opd-clinical-intake.service";
 import { OpdClinicalService } from "./opd-clinical.service";
 
 const SCOPE: RequestScope = {
@@ -32,6 +34,8 @@ describe("OpdClinicalController", () => {
     ["examination", "OPD_READ"],
     ["createExamination", "OPD_EDIT"],
     ["patchVitals", "OPD_EDIT"],
+    ["intake", "OPD_READ"],
+    ["patchIntake", "OPD_EDIT"],
     ["finalizeExamination", "OPD_EDIT"],
   ])("%s requires %s", (method, permission) => {
     expect(requiredPermissions(method)).toEqual({
@@ -53,7 +57,10 @@ describe("OpdClinicalController", () => {
     };
     const module = await Test.createTestingModule({
       controllers: [OpdClinicalController],
-      providers: [{ provide: OpdClinicalService, useValue: clinicalService }],
+      providers: [
+        { provide: OpdClinicalService, useValue: clinicalService },
+        { provide: OpdClinicalIntakeService, useValue: {} },
+      ],
     }).compile();
     const controller = module.get(OpdClinicalController);
     const dto = { expectedVersion: 1, weightKg: 70 };
@@ -75,6 +82,41 @@ describe("OpdClinicalController", () => {
     );
   });
 
+  it("delegates intake writes with trusted actor context", async () => {
+    const intakeService = {
+      patchIntake: jest.fn().mockResolvedValue({ intakeId: "intake-1" }),
+    };
+    const module = await Test.createTestingModule({
+      controllers: [OpdClinicalController],
+      providers: [
+        { provide: OpdClinicalService, useValue: {} },
+        { provide: OpdClinicalIntakeService, useValue: intakeService },
+      ],
+    }).compile();
+    const controller = module.get(OpdClinicalController);
+    const dto = {
+      expectedVersion: 0,
+      urinaryStatus: OpdUrinaryStatus.NORMAL,
+      bowelStatus: OpdBowelStatus.NORMAL,
+    };
+
+    await controller.patchIntake(
+      "encounter-1",
+      "exam-1",
+      dto,
+      SCOPE,
+      PRINCIPAL,
+    );
+
+    expect(intakeService.patchIntake).toHaveBeenCalledWith(
+      "encounter-1",
+      "exam-1",
+      dto,
+      SCOPE,
+      PRINCIPAL,
+    );
+  });
+
   it("delegates a correction with header idempotency and trusted actor context", async () => {
     const clinicalService = {
       createExaminationCorrection: jest
@@ -83,7 +125,10 @@ describe("OpdClinicalController", () => {
     };
     const module = await Test.createTestingModule({
       controllers: [OpdClinicalController],
-      providers: [{ provide: OpdClinicalService, useValue: clinicalService }],
+      providers: [
+        { provide: OpdClinicalService, useValue: clinicalService },
+        { provide: OpdClinicalIntakeService, useValue: {} },
+      ],
     }).compile();
     const controller = module.get(OpdClinicalController);
     const dto = {

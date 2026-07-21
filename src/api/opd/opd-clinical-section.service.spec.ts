@@ -94,6 +94,7 @@ async function makeService() {
       },
       examination: null,
       vitals: null,
+      intake: null,
       symptoms: {
         id: SYMPTOM_SECTION.symptom_section_id,
         version: 2,
@@ -424,6 +425,7 @@ describe("OpdClinicalSectionService", () => {
       },
       examination: null,
       vitals: null,
+      intake: null,
       symptoms: null,
       diagnoses: null,
       noteWorkspace: {

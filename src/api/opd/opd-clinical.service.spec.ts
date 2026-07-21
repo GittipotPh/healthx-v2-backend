@@ -11,6 +11,7 @@ import { VersionConflictException } from "../../common/version-conflict.exceptio
 import { PrismaService } from "../../prisma.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
 import { OpdClinicalRepository } from "./opd-clinical.repository";
+import { OpdClinicalIntakeRepository } from "./opd-clinical-intake.repository";
 import { OpdClinicalSectionRepository } from "./opd-clinical-section.repository";
 import { OpdClinicalService } from "./opd-clinical.service";
 
@@ -100,6 +101,23 @@ const SYMPTOM_SECTION = {
   symptoms: [],
 };
 
+const INTAKE = {
+  intake_id: "77777777-7777-4777-8777-777777777777",
+  clinic_id: SCOPE.clinicId,
+  branch_id: SCOPE.branchId,
+  encounter_id: ENCOUNTER.encounter_id,
+  examination_id: EXAMINATION.examination_id,
+  urinary_status: "NORMAL",
+  urinary_other_text: null,
+  bowel_status: "CONSTIPATION",
+  bowel_other_text: null,
+  version: 2,
+  created_by: SCOPE.userId,
+  updated_by: SCOPE.userId,
+  created_at: NOW,
+  updated_at: NOW,
+};
+
 function finalizedExamination() {
   return {
     ...EXAMINATION,
@@ -177,11 +195,15 @@ async function makeService() {
   const sectionRepository = {
     findSymptomSection: jest.fn().mockResolvedValue(null),
   };
+  const intakeRepository = {
+    findIntake: jest.fn().mockResolvedValue(null),
+  };
   const auditLogService = { create: jest.fn().mockResolvedValue({}) };
   const module = await Test.createTestingModule({
     providers: [
       OpdClinicalService,
       { provide: OpdClinicalRepository, useValue: repository },
+      { provide: OpdClinicalIntakeRepository, useValue: intakeRepository },
       { provide: OpdClinicalSectionRepository, useValue: sectionRepository },
       { provide: PrismaService, useValue: prisma },
       { provide: AuditLogService, useValue: auditLogService },
@@ -190,6 +212,7 @@ async function makeService() {
   return {
     service: module.get(OpdClinicalService),
     repository,
+    intakeRepository,
     sectionRepository,
     prisma,
     auditLogService,
@@ -401,6 +424,7 @@ describe("OpdClinicalService", () => {
     const {
       service,
       repository,
+      intakeRepository,
       sectionRepository,
       auditLogService,
       transactionClient,
@@ -410,6 +434,7 @@ describe("OpdClinicalService", () => {
     repository.findExamination.mockResolvedValue(source);
     repository.nextExaminationNumber.mockResolvedValue(2);
     repository.createCorrectionExamination.mockResolvedValue(correction);
+    intakeRepository.findIntake.mockResolvedValue(INTAKE);
     sectionRepository.findSymptomSection.mockResolvedValue(SYMPTOM_SECTION);
 
     const result = await service.createExaminationCorrection(
@@ -418,6 +443,7 @@ describe("OpdClinicalService", () => {
       {
         expectedExaminationVersion: 2,
         expectedVitalVersion: 1,
+        expectedIntakeVersion: 2,
         expectedSymptomVersion: 3,
         reason: "  Correct transcribed blood pressure  ",
       },
@@ -440,6 +466,7 @@ describe("OpdClinicalService", () => {
     );
     expect(repository.createCorrectionExamination).toHaveBeenCalledWith(
       source,
+      INTAKE,
       SYMPTOM_SECTION,
       2,
       source.examination_id,
@@ -454,6 +481,8 @@ describe("OpdClinicalService", () => {
         metadata: expect.objectContaining({
           sourceExaminationVersion: 2,
           sourceVitalVersion: 1,
+          sourceIntakeId: INTAKE.intake_id,
+          sourceIntakeVersion: 2,
           sourceSymptomVersion: 3,
           reason: "Correct transcribed blood pressure",
         }),
@@ -723,6 +752,60 @@ describe("OpdClinicalService", () => {
       expect.objectContaining({
         symptomSectionId: SYMPTOM_SECTION.symptom_section_id,
         symptomVersion: 3,
+      }),
+      expect.any(Date),
+      transactionClient,
+    );
+  });
+
+  it("requires and snapshots the current intake version during finalization", async () => {
+    const {
+      service,
+      repository,
+      intakeRepository,
+      auditLogService,
+      transactionClient,
+    } = await makeService();
+    intakeRepository.findIntake.mockResolvedValue(INTAKE);
+    repository.findExamination
+      .mockResolvedValueOnce(EXAMINATION)
+      .mockResolvedValueOnce(finalizedExamination());
+
+    await service.finalizeExamination(
+      ENCOUNTER.encounter_id,
+      EXAMINATION.examination_id,
+      {
+        expectedExaminationVersion: 1,
+        expectedVitalVersion: 1,
+        expectedIntakeVersion: 2,
+      },
+      "finalize-with-intake",
+      SCOPE,
+      PRINCIPAL,
+    );
+
+    expect(intakeRepository.findIntake).toHaveBeenCalledWith(
+      ENCOUNTER.encounter_id,
+      EXAMINATION.examination_id,
+      SCOPE,
+      transactionClient,
+    );
+    expect(auditLogService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          intakeId: INTAKE.intake_id,
+          intakeVersion: 2,
+        }),
+      }),
+      transactionClient,
+    );
+    expect(repository.completeIdempotency).toHaveBeenCalledWith(
+      "claim-1",
+      EXAMINATION.examination_id,
+      SCOPE,
+      expect.objectContaining({
+        intakeId: INTAKE.intake_id,
+        intakeVersion: 2,
       }),
       expect.any(Date),
       transactionClient,
