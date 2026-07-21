@@ -21,6 +21,7 @@ import {
   wallet_type,
 } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { syncFixtureAppointmentTicket } from "./opd-v2-fixture-ticket-sync";
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/healthx_optionb_test?schema=public";
 const EMAIL = "admin.test@healthx.local";
@@ -228,6 +229,46 @@ async function seedClinicAndBranch(
   };
   const paymentMethodId = `PAYMENT-CARD-${prefix}-TRANSFER`;
 
+  const startedFixtureEncounter = await prisma.opd_encounter.findFirst({
+    where: {
+      clinic_id: clinicId,
+      branch_id: branchId,
+      OR: [
+        { appointment_id: { in: mockAppIds } },
+        { customer_id: { in: mockCustomerIds } },
+      ],
+    },
+    select: { encounter_id: true },
+  });
+  if (startedFixtureEncounter) {
+    throw new Error(
+      `Refusing fixture refresh because OPD encounter ${startedFixtureEncounter.encounter_id} exists for mock clinical data`,
+    );
+  }
+  const stableFixtureTickets = await prisma.opd_queue_ticket.findMany({
+    where: {
+      clinic_id: clinicId,
+      branch_id: branchId,
+      appointment_id: { in: mockAppIds },
+      source_type: "APPOINTMENT",
+    },
+    select: { appointment_id: true },
+  });
+  const stableFixtureAppointmentIds = stableFixtureTickets.flatMap((ticket) =>
+    ticket.appointment_id ? [ticket.appointment_id] : [],
+  );
+  const stableFixtureAppointments = await prisma.appointment.findMany({
+    where: {
+      clinic_id: clinicId,
+      branch_id: branchId,
+      appointment_id: { in: stableFixtureAppointmentIds },
+    },
+    select: { opd_id: true },
+  });
+  const stableFixtureLegacyOpdIds = stableFixtureAppointments.flatMap(
+    (appointment) => (appointment.opd_id ? [appointment.opd_id] : []),
+  );
+
   // 3) Clean existing seed operational data for this branch safely
   await prisma.sale_order_item.deleteMany({ where: { branch_id: branchId } }).catch(() => {});
   await prisma.customer_course_usage_log.deleteMany({ where: { branch_id: branchId } }).catch(() => {});
@@ -244,17 +285,27 @@ async function seedClinicAndBranch(
   // Safe delete appointments, OPDs, and customer references using target mock IDs
   await prisma.appointment.deleteMany({
     where: {
-      OR: [
-        { appointment_id: { in: mockAppIds } },
-        { clinic_id: clinicId, customer_id: { in: mockCustomerIds } },
+      AND: [
+        {
+          OR: [
+            { appointment_id: { in: mockAppIds } },
+            { clinic_id: clinicId, customer_id: { in: mockCustomerIds } },
+          ],
+        },
+        { appointment_id: { notIn: stableFixtureAppointmentIds } },
       ],
     },
   });
   await prisma.opd.deleteMany({
     where: {
-      OR: [
-        { opd_id: { in: mockOpdIds } },
-        { clinic_id: clinicId, customer_id: { in: mockCustomerIds } },
+      AND: [
+        {
+          OR: [
+            { opd_id: { in: mockOpdIds } },
+            { clinic_id: clinicId, customer_id: { in: mockCustomerIds } },
+          ],
+        },
+        { opd_id: { notIn: stableFixtureLegacyOpdIds } },
       ],
     },
   });
@@ -854,10 +905,7 @@ async function seedClinicAndBranch(
     let opdId: string | null = null;
     if (app.status === statusAppointment.SUCCESS || app.status === statusAppointment.IN_SERVICE) {
       opdId = `OPD-${app.id}`;
-      await prisma.opd.create({
-        data: {
-          opd_id: opdId,
-          branch_id: branchId,
+      const opdRecord = {
           clinic_id: clinicId,
           customer_id: app.customerId,
           user_create: doctorUserId,
@@ -874,32 +922,56 @@ async function seedClinicAndBranch(
           bmi: 22.1,
           weight: 65,
           height: 171,
+        updated_at: now,
+      };
+      await prisma.opd.upsert({
+        where: {
+          opd_id_branch_id: { opd_id: opdId, branch_id: branchId },
+        },
+        update: opdRecord,
+        create: {
+          ...opdRecord,
+          opd_id: opdId,
+          branch_id: branchId,
           created_at: now,
-          updated_at: now,
         },
       });
     }
 
-    await prisma.appointment.create({
-      data: {
-        appointment_id: app.id,
-        branch_id: branchId,
-        clinic_id: clinicId,
-        customer_id: app.customerId,
-        user_create: adminUserId,
-        room: app.room,
-        date_appointment: todayStr,
-        time_arrive: app.time,
-        start_time: app.time,
-        end_time: app.time,
-        is_consult: app.isConsult,
-        apply_anesthetic: app.applyAnesthetic,
-        status_appointment: app.status,
-        appointment_detail: app.detail,
-        opd_id: opdId,
-        created_at: now,
-        updated_at: now,
-      },
+    const appointmentRecord = {
+      branch_id: branchId,
+      clinic_id: clinicId,
+      customer_id: app.customerId,
+      user_create: adminUserId,
+      room: app.room,
+      date_appointment: todayStr,
+      time_arrive: app.time,
+      start_time: app.time,
+      end_time: app.time,
+      is_consult: app.isConsult,
+      apply_anesthetic: app.applyAnesthetic,
+      status_appointment: app.status,
+      appointment_detail: app.detail,
+      opd_id: opdId,
+      updated_at: now,
+    };
+    await prisma.$transaction(async (tx) => {
+      await tx.appointment.upsert({
+        where: { appointment_id: app.id },
+        update: appointmentRecord,
+        create: {
+          ...appointmentRecord,
+          appointment_id: app.id,
+          created_at: now,
+        },
+      });
+      await syncFixtureAppointmentTicket(tx, {
+        clinicId,
+        branchId,
+        appointmentId: app.id,
+        customerId: app.customerId,
+        businessDate: todayStr,
+      });
     });
   }
 
@@ -912,25 +984,40 @@ async function seedClinicAndBranch(
   ];
 
   for (const app of futureAppointments) {
-    await prisma.appointment.create({
-      data: {
-        appointment_id: app.id,
-        branch_id: branchId,
-        clinic_id: clinicId,
-        customer_id: app.customerId,
-        user_create: adminUserId,
-        room: app.room,
-        date_appointment: app.date,
-        time_arrive: app.time,
-        start_time: app.time,
-        end_time: app.time,
-        is_consult: false,
-        apply_anesthetic: false,
-        status_appointment: statusAppointment.APPOINT,
-        appointment_detail: app.detail,
-        created_at: now,
-        updated_at: now,
-      },
+    const appointmentRecord = {
+      branch_id: branchId,
+      clinic_id: clinicId,
+      customer_id: app.customerId,
+      user_create: adminUserId,
+      room: app.room,
+      date_appointment: app.date,
+      time_arrive: app.time,
+      start_time: app.time,
+      end_time: app.time,
+      is_consult: false,
+      apply_anesthetic: false,
+      status_appointment: statusAppointment.APPOINT,
+      appointment_detail: app.detail,
+      opd_id: null,
+      updated_at: now,
+    };
+    await prisma.$transaction(async (tx) => {
+      await tx.appointment.upsert({
+        where: { appointment_id: app.id },
+        update: appointmentRecord,
+        create: {
+          ...appointmentRecord,
+          appointment_id: app.id,
+          created_at: now,
+        },
+      });
+      await syncFixtureAppointmentTicket(tx, {
+        clinicId,
+        branchId,
+        appointmentId: app.id,
+        customerId: app.customerId,
+        businessDate: app.date,
+      });
     });
   }
 }

@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { ConflictException, Injectable } from "@nestjs/common";
 import type {
   Prisma,
   api_idempotency,
@@ -12,6 +12,7 @@ import { PrismaService } from "../../prisma.service";
 import type { OpdWithCustomer } from "./opd.mapper";
 import type { QueryOpdDto } from "./dto/query-opd.dto";
 import type { RequestScope } from "../../auth/auth.types";
+import type { AppointmentForQueue } from "../queue/queue.mapper";
 
 export interface PaginatedOpd {
   items: OpdWithCustomer[];
@@ -57,6 +58,43 @@ export interface OpdWorkspaceRecord {
   legacyOpd: opd;
 }
 
+export interface OpdWorklistAppointmentRecord {
+  appointment: AppointmentForQueue;
+  ticket: opd_queue_ticket;
+  encounterId: string | null;
+}
+
+const OPD_WORKLIST_APPOINTMENT_SELECT = {
+  appointment_id: true,
+  clinic_id: true,
+  branch_id: true,
+  customer_id: true,
+  room: true,
+  channel: true,
+  date_appointment: true,
+  time_arrive: true,
+  start_time: true,
+  end_time: true,
+  is_consult: true,
+  apply_anesthetic: true,
+  appointment_detail: true,
+  status_appointment: true,
+  opd_id: true,
+  customer: {
+    select: {
+      name: true,
+      lastname: true,
+      personal_id: true,
+      nickname: true,
+      phone_number: true,
+      gender: true,
+      customer_image: true,
+      customer_info: { select: { allergy: true } },
+    },
+  },
+  opd: { select: { status_opd: true } },
+} satisfies Prisma.appointmentSelect;
+
 @Injectable()
 export class OpdRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -95,6 +133,129 @@ export class OpdRepository {
       },
       include: { customer: true },
       orderBy: { opd_date: "desc" },
+    });
+  }
+
+  /**
+   * Reads the OPD V2 appointment population from stable app-owned tickets.
+   * Ticketless legacy appointments are deliberately invisible here; the shared
+   * queue endpoint remains the compatibility read for that wider population.
+   */
+  async findWorklistTickets(
+    clinicId: string,
+    branchId: string,
+    businessDate: string,
+  ): Promise<OpdWorklistAppointmentRecord[]> {
+    const tickets = await this.prisma.opd_queue_ticket.findMany({
+      where: {
+        clinic_id: clinicId,
+        branch_id: branchId,
+        source_type: "APPOINTMENT",
+        business_date: new Date(`${businessDate}T00:00:00.000Z`),
+      },
+      orderBy: { queue_sequence: "asc" },
+    });
+    if (tickets.length === 0) return [];
+
+    const appointmentIds = tickets.flatMap((ticket) =>
+      ticket.appointment_id ? [ticket.appointment_id] : [],
+    );
+    const legacyQueueStatusIds = tickets.flatMap((ticket) =>
+      ticket.legacy_queue_status_id ? [ticket.legacy_queue_status_id] : [],
+    );
+    const ticketIds = tickets.map((ticket) => ticket.queue_ticket_id);
+
+    const [appointments, legacyQueueStatuses, encounters] = await Promise.all([
+      this.prisma.appointment.findMany({
+        where: {
+          clinic_id: clinicId,
+          branch_id: branchId,
+          date_appointment: businessDate,
+          appointment_id: { in: appointmentIds },
+        },
+        select: OPD_WORKLIST_APPOINTMENT_SELECT,
+      }),
+      this.prisma.queue_status.findMany({
+        where: {
+          clinic_id: clinicId,
+          branch_id: branchId,
+          queue_status_id: { in: legacyQueueStatusIds },
+        },
+        select: {
+          queue_status_id: true,
+          clinic_id: true,
+          branch_id: true,
+          appointment_id: true,
+          current_step: true,
+        },
+      }),
+      this.prisma.opd_encounter.findMany({
+        where: {
+          clinic_id: clinicId,
+          branch_id: branchId,
+          queue_ticket_id: { in: ticketIds },
+        },
+        select: {
+          encounter_id: true,
+          queue_ticket_id: true,
+          customer_id: true,
+          appointment_id: true,
+          business_date: true,
+        },
+      }),
+    ]);
+
+    const appointmentById = new Map(
+      appointments.map((appointment) => [
+        appointment.appointment_id,
+        appointment,
+      ]),
+    );
+    const legacyQueueStatusById = new Map(
+      legacyQueueStatuses.map((status) => [status.queue_status_id, status]),
+    );
+    const encounterByTicketId = new Map(
+      encounters.map((encounter) => [encounter.queue_ticket_id, encounter]),
+    );
+
+    return tickets.map((ticket) => {
+      const appointment = ticket.appointment_id
+        ? appointmentById.get(ticket.appointment_id)
+        : undefined;
+      const legacyQueueStatus = ticket.legacy_queue_status_id
+        ? legacyQueueStatusById.get(ticket.legacy_queue_status_id)
+        : undefined;
+      const encounter = encounterByTicketId.get(ticket.queue_ticket_id);
+      const encounterDate = encounter?.business_date.toISOString().slice(0, 10);
+
+      if (
+        !ticket.appointment_id ||
+        !appointment ||
+        !appointment.customer ||
+        appointment.clinic_id !== clinicId ||
+        appointment.branch_id !== branchId ||
+        appointment.customer_id !== ticket.customer_id ||
+        appointment.date_appointment !== businessDate ||
+        !legacyQueueStatus ||
+        legacyQueueStatus.clinic_id !== clinicId ||
+        legacyQueueStatus.branch_id !== branchId ||
+        legacyQueueStatus.appointment_id !== ticket.appointment_id ||
+        legacyQueueStatus.current_step !== ticket.current_step ||
+        (encounter !== undefined &&
+          (encounter.customer_id !== ticket.customer_id ||
+            encounter.appointment_id !== ticket.appointment_id ||
+            encounterDate !== businessDate))
+      ) {
+        throw new ConflictException(
+          `OPD queue ticket ${ticket.queue_ticket_id} is not reconciled`,
+        );
+      }
+
+      return {
+        appointment,
+        ticket,
+        encounterId: encounter?.encounter_id ?? null,
+      };
     });
   }
 

@@ -168,6 +168,41 @@ describe("QueueService.today", () => {
     expect(repository.findWalkInQueue).not.toHaveBeenCalled();
   });
 
+  it("keeps ticketless legacy appointments on the shared queue compatibility endpoint", async () => {
+    const { service, repository } = makeService();
+    jest.spyOn(repository, "findTodayQueue").mockResolvedValue([
+      {
+        appointment_id: "legacy-appointment-1",
+        clinic_id: SCOPE.clinicId,
+        branch_id: SCOPE.branchId,
+        customer_id: "customer-1",
+        room: null,
+        channel: null,
+        date_appointment: "2026-07-18",
+        time_arrive: "09:00",
+        start_time: "09:00",
+        end_time: "09:30",
+        is_consult: false,
+        apply_anesthetic: false,
+        appointment_detail: null,
+        status_appointment: statusAppointment.APPOINT,
+        opd_id: null,
+        customer: null,
+        opd: null,
+      },
+    ]);
+
+    const result = await service.today({ date: "2026-07-18" }, SCOPE);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toEqual(
+      expect.objectContaining({
+        appointmentId: "legacy-appointment-1",
+        queueTicketId: null,
+      }),
+    );
+  });
+
   it("keeps a V2 walk-in visible after reload with stable identity, wait, and facets", async () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-07-18T03:30:00.000Z"));
     const { service, repository } = makeService();

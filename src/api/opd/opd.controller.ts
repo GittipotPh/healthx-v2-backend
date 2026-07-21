@@ -13,9 +13,12 @@ import { OpdService, OpdListResult } from "./opd.service";
 import { OpdView } from "./opd.mapper";
 import { QueryOpdDto } from "./dto/query-opd.dto";
 import { StartOpdDto } from "./dto/start-opd.dto";
-import { OpdWorkspaceView, StartOpdResult } from "./opd-v2.mapper";
+import {
+  OpdWorklistResult,
+  OpdWorkspaceView,
+  StartOpdResult,
+} from "./opd-v2.mapper";
 import { QueryQueueDto } from "../queue/dto/query-queue.dto";
-import { QueueService, QueueTodayResult } from "../queue/queue.service";
 import {
   BaseOpenApiArrayResponse,
   BaseOpenApiErrorResponses,
@@ -30,10 +33,7 @@ import { OpdV2EnabledGuard } from "./opd-v2-enabled.guard";
 @BaseOpenApiErrorResponses()
 @Controller("clinic/opd")
 export class OpdController {
-  constructor(
-    private readonly opdService: OpdService,
-    private readonly queueService: QueueService,
-  ) {}
+  constructor(private readonly opdService: OpdService) {}
 
   @Get()
   @RequirePermissions("OPD_READ")
@@ -78,12 +78,12 @@ export class OpdController {
   @Get("worklist")
   @UseGuards(OpdV2EnabledGuard)
   @RequirePermissions("OPD_READ")
-  @BaseOpenApiResponse(QueueTodayResult)
+  @BaseOpenApiResponse(OpdWorklistResult)
   worklist(
     @Query() query: QueryQueueDto,
     @Scope() scope: RequestScope,
-  ): Promise<QueueTodayResult> {
-    return this.queueService.today(query, scope);
+  ): Promise<OpdWorklistResult> {
+    return this.opdService.worklist(query, scope);
   }
 
   @Get(":encounterId/workspace")

@@ -6,7 +6,6 @@ import {
 } from "../../auth/permissions.decorator";
 import { OpdController } from "./opd.controller";
 import type { OpdService } from "./opd.service";
-import type { QueueService } from "../queue/queue.service";
 
 const SCOPE: RequestScope = {
   userId: "user-1",
@@ -39,24 +38,21 @@ describe("OpdController", () => {
     });
   });
 
-  it("delegates the OPD worklist alias to the shared scoped queue read model", async () => {
+  it("delegates the OPD worklist to the dedicated OPD service", async () => {
     const result = {
       date: "2026-07-18",
       items: [],
       facets: { total: 0, appointments: 0, walkIns: 0, byStep: {} },
     };
-    const queueService = {
-      today: jest.fn().mockResolvedValue(result),
+    const opdService = {
+      worklist: jest.fn().mockResolvedValue(result),
     };
-    const controller = new OpdController(
-      {} as OpdService,
-      queueService as unknown as QueueService,
-    );
+    const controller = new OpdController(opdService as unknown as OpdService);
 
     await expect(
       controller.worklist({ date: "2026-07-18" }, SCOPE),
     ).resolves.toEqual(result);
-    expect(queueService.today).toHaveBeenCalledWith(
+    expect(opdService.worklist).toHaveBeenCalledWith(
       { date: "2026-07-18" },
       SCOPE,
     );

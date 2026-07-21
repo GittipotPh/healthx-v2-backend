@@ -2335,6 +2335,9 @@ model opd_encounter {
   queue_ticket           opd_queue_ticket       @relation(fields: [queue_ticket_id, clinic_id, branch_id, customer_id, business_date], references: [queue_ticket_id, clinic_id, branch_id, customer_id, business_date], onDelete: Restrict, onUpdate: Cascade, map: "opd_encounter_ticket_identity_fkey")
   transitions            queue_transition[]
   draft_checkpoints      opd_draft_checkpoint[]
+  examinations           opd_examination[]
+  diagnosis_section      opd_diagnosis_section?
+  note_workspace         opd_note_workspace?
 
   @@unique([encounter_id, clinic_id, branch_id], map: "opd_encounter_tenant_uq")
   @@unique([queue_ticket_id, clinic_id, branch_id], map: "opd_encounter_queue_ticket_uq")
@@ -2413,6 +2416,241 @@ model opd_draft_checkpoint {
 
   @@unique([clinic_id, branch_id, encounter_id, checkpoint_number], map: "opd_draft_checkpoint_number_uq")
   @@index([clinic_id, branch_id, encounter_id, created_at], map: "opd_draft_checkpoint_created_idx")
+}
+
+// Versioned Phase 2 vital-examination aggregate. Legacy HealthX identifiers
+// remain scalar strings; the only relation is to the app-owned OPD encounter.
+model opd_examination {
+  examination_id            String                 @id @default(uuid()) @db.Uuid
+  clinic_id                 String                 @db.VarChar(50)
+  branch_id                 String                 @db.VarChar(50)
+  encounter_id              String                 @db.Uuid
+  examination_number        Int
+  status                    String                 @default("DRAFT") @db.VarChar(20)
+  version                   Int                    @default(1)
+  measured_at               DateTime               @db.Timestamptz(6)
+  recorder_user_id          String                 @db.VarChar(50)
+  examiner_user_id          String?                @db.VarChar(50)
+  corrects_examination_id   String?                @db.Uuid
+  supersedes_examination_id String?                @db.Uuid
+  correction_source_version Int?
+  correction_reason         String?                @db.VarChar(500)
+  finalized_at              DateTime?              @db.Timestamptz(6)
+  finalized_by              String?                @db.VarChar(50)
+  voided_at                 DateTime?              @db.Timestamptz(6)
+  voided_by                 String?                @db.VarChar(50)
+  void_reason               String?                @db.VarChar(500)
+  created_by                String                 @db.VarChar(50)
+  updated_by                String                 @db.VarChar(50)
+  created_at                DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at                DateTime               @default(now()) @updatedAt @db.Timestamptz(6)
+  encounter                 opd_encounter          @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_examination_encounter_tenant_fkey")
+  correction_root           opd_examination?       @relation("OpdExaminationCorrectionRoot", fields: [corrects_examination_id, clinic_id, branch_id, encounter_id], references: [examination_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_examination_corrects_identity_fkey")
+  correction_revisions      opd_examination[]      @relation("OpdExaminationCorrectionRoot")
+  superseded_examination    opd_examination?       @relation("OpdExaminationSupersedes", fields: [supersedes_examination_id, clinic_id, branch_id, encounter_id], references: [examination_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_examination_supersedes_identity_fkey")
+  superseding_examination   opd_examination?       @relation("OpdExaminationSupersedes")
+  vital_observation         opd_vital_observation?
+  symptom_section           opd_symptom_section?
+
+  @@unique([examination_id, clinic_id, branch_id], map: "opd_examination_tenant_uq")
+  @@unique([examination_id, clinic_id, branch_id, encounter_id], map: "opd_examination_identity_uq")
+  @@unique([clinic_id, branch_id, encounter_id, examination_number], map: "opd_examination_number_uq")
+  @@unique([supersedes_examination_id, clinic_id, branch_id, encounter_id], map: "opd_examination_supersedes_uq")
+  @@index([clinic_id, branch_id, encounter_id, status, examination_number], map: "opd_examination_encounter_idx")
+  @@index([clinic_id, branch_id, encounter_id, corrects_examination_id, examination_number], map: "opd_examination_correction_root_idx")
+}
+
+// Independently versioned one-to-one vital section. BMI is server-derived from
+// weight and height; reference interpretations remain null until an approved
+// versioned rule catalog exists.
+model opd_vital_observation {
+  vital_observation_id          String          @id @default(uuid()) @db.Uuid
+  clinic_id                     String          @db.VarChar(50)
+  branch_id                     String          @db.VarChar(50)
+  encounter_id                  String          @db.Uuid
+  examination_id                String          @db.Uuid
+  weight_kg                     Decimal?        @db.Decimal(7, 2)
+  height_cm                     Decimal?        @db.Decimal(7, 2)
+  body_mass_index               Decimal?        @db.Decimal(5, 2)
+  systolic_blood_pressure_mmhg  Int?
+  diastolic_blood_pressure_mmhg Int?
+  pulse_rate_per_minute         Int?
+  temperature_celsius           Decimal?        @db.Decimal(4, 1)
+  oxygen_saturation_percent     Decimal?        @db.Decimal(5, 2)
+  respiratory_rate_per_minute   Int?
+  dtx_mg_dl                     Decimal?        @db.Decimal(7, 2)
+  pain_score                    Int?
+  reference_rule_version        String?         @db.VarChar(50)
+  interpretation_snapshot       Json?
+  version                       Int             @default(1)
+  created_by                    String          @db.VarChar(50)
+  updated_by                    String          @db.VarChar(50)
+  created_at                    DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at                    DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  examination                   opd_examination @relation(fields: [examination_id, clinic_id, branch_id, encounter_id], references: [examination_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_vital_observation_examination_identity_fkey")
+
+  @@unique([examination_id, clinic_id, branch_id], map: "opd_vital_observation_examination_uq")
+  @@unique([examination_id, clinic_id, branch_id, encounter_id], map: "opd_vital_observation_identity_uq")
+  @@index([clinic_id, branch_id, encounter_id, examination_id], map: "opd_vital_observation_encounter_idx")
+}
+
+// Independently versioned symptom section. The examination-level patient quote
+// follows the approved prototype; repeatable symptoms remain normalized rows.
+model opd_symptom_section {
+  symptom_section_id String          @id @default(uuid()) @db.Uuid
+  clinic_id          String          @db.VarChar(50)
+  branch_id          String          @db.VarChar(50)
+  encounter_id       String          @db.Uuid
+  examination_id     String          @db.Uuid
+  patient_quote      String?         @db.VarChar(4000)
+  version            Int             @default(1)
+  created_by         String          @db.VarChar(50)
+  updated_by         String          @db.VarChar(50)
+  created_at         DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  examination        opd_examination @relation(fields: [examination_id, clinic_id, branch_id, encounter_id], references: [examination_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_symptom_section_examination_identity_fkey")
+  symptoms           opd_symptom[]
+
+  @@unique([symptom_section_id, clinic_id, branch_id, encounter_id], map: "opd_symptom_section_identity_uq")
+  @@unique([examination_id, clinic_id, branch_id, encounter_id], map: "opd_symptom_section_examination_uq")
+  @@index([clinic_id, branch_id, encounter_id, examination_id], map: "opd_symptom_section_encounter_idx")
+}
+
+model opd_symptom {
+  symptom_id         String                    @id @default(uuid()) @db.Uuid
+  clinic_id          String                    @db.VarChar(50)
+  branch_id          String                    @db.VarChar(50)
+  encounter_id       String                    @db.Uuid
+  symptom_section_id String                    @db.Uuid
+  display_order      Int
+  main_code          String?                   @db.VarChar(50)
+  main_text          String                    @db.VarChar(300)
+  duration_value     Decimal?                  @db.Decimal(10, 2)
+  duration_unit      String?                   @db.VarChar(30)
+  location           String?                   @db.VarChar(200)
+  laterality         String?                   @db.VarChar(20)
+  severity           Int?
+  character          String?                   @db.VarChar(200)
+  modifying_factors  String?                   @db.VarChar(1000)
+  staff_summary      String?                   @db.VarChar(4000)
+  created_by         String                    @db.VarChar(50)
+  updated_by         String                    @db.VarChar(50)
+  created_at         DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)
+  symptom_section    opd_symptom_section       @relation(fields: [symptom_section_id, clinic_id, branch_id, encounter_id], references: [symptom_section_id, clinic_id, branch_id, encounter_id], onDelete: Cascade, onUpdate: Cascade, map: "opd_symptom_section_identity_fkey")
+  associations       opd_symptom_association[]
+
+  @@unique([symptom_id, clinic_id, branch_id, encounter_id], map: "opd_symptom_identity_uq")
+  @@unique([symptom_section_id, display_order], map: "opd_symptom_order_uq")
+  @@index([clinic_id, branch_id, encounter_id, symptom_section_id], map: "opd_symptom_section_idx")
+}
+
+model opd_symptom_association {
+  symptom_association_id String      @id @default(uuid()) @db.Uuid
+  clinic_id              String      @db.VarChar(50)
+  branch_id              String      @db.VarChar(50)
+  encounter_id           String      @db.Uuid
+  symptom_id             String      @db.Uuid
+  display_order          Int
+  code                   String?     @db.VarChar(50)
+  label                  String      @db.VarChar(200)
+  created_at             DateTime    @default(now()) @db.Timestamptz(6)
+  symptom                opd_symptom @relation(fields: [symptom_id, clinic_id, branch_id, encounter_id], references: [symptom_id, clinic_id, branch_id, encounter_id], onDelete: Cascade, onUpdate: Cascade, map: "opd_symptom_association_symptom_identity_fkey")
+
+  @@unique([symptom_id, display_order], map: "opd_symptom_association_order_uq")
+  @@index([clinic_id, branch_id, encounter_id, symptom_id], map: "opd_symptom_association_symptom_idx")
+}
+
+// Encounter-level diagnosis section stays DRAFT until the future confirm-cure
+// command. Code/system/edition/label are immutable snapshots, not FKs to a
+// mutable external catalog.
+model opd_diagnosis_section {
+  diagnosis_section_id String          @id @default(uuid()) @db.Uuid
+  clinic_id            String          @db.VarChar(50)
+  branch_id            String          @db.VarChar(50)
+  encounter_id         String          @db.Uuid
+  status               String          @default("DRAFT") @db.VarChar(20)
+  version              Int             @default(1)
+  created_by           String          @db.VarChar(50)
+  updated_by           String          @db.VarChar(50)
+  created_at           DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  encounter            opd_encounter   @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_diagnosis_section_encounter_tenant_fkey")
+  diagnoses            opd_diagnosis[]
+
+  @@unique([diagnosis_section_id, clinic_id, branch_id, encounter_id], map: "opd_diagnosis_section_identity_uq")
+  @@unique([encounter_id, clinic_id, branch_id], map: "opd_diagnosis_section_encounter_uq")
+  @@index([clinic_id, branch_id, encounter_id, status], map: "opd_diagnosis_section_encounter_idx")
+}
+
+model opd_diagnosis {
+  diagnosis_id         String                @id @default(uuid()) @db.Uuid
+  clinic_id            String                @db.VarChar(50)
+  branch_id            String                @db.VarChar(50)
+  encounter_id         String                @db.Uuid
+  diagnosis_section_id String                @db.Uuid
+  display_order        Int
+  code_system          String                @default("ICD-10") @db.VarChar(30)
+  code_edition         String?               @db.VarChar(30)
+  code                 String?               @db.VarChar(30)
+  label                String                @db.VarChar(300)
+  is_primary           Boolean               @default(false)
+  onset_text           String?               @db.VarChar(200)
+  note                 String?               @db.VarChar(2000)
+  created_by           String                @db.VarChar(50)
+  updated_by           String                @db.VarChar(50)
+  created_at           DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+  diagnosis_section    opd_diagnosis_section @relation(fields: [diagnosis_section_id, clinic_id, branch_id, encounter_id], references: [diagnosis_section_id, clinic_id, branch_id, encounter_id], onDelete: Cascade, onUpdate: Cascade, map: "opd_diagnosis_section_identity_fkey")
+
+  @@unique([diagnosis_section_id, display_order], map: "opd_diagnosis_order_uq")
+  @@index([clinic_id, branch_id, encounter_id, diagnosis_section_id], map: "opd_diagnosis_section_idx")
+}
+
+// Encounter-level note display mode. Structured and free-writing sections are
+// retained independently so changing the selected mode never destroys content.
+model opd_note_workspace {
+  note_workspace_id String             @id @default(uuid()) @db.Uuid
+  clinic_id         String             @db.VarChar(50)
+  branch_id         String             @db.VarChar(50)
+  encounter_id      String             @db.Uuid
+  selected_mode     String             @default("FORM") @db.VarChar(10)
+  version           Int                @default(1)
+  created_by        String             @db.VarChar(50)
+  updated_by        String             @db.VarChar(50)
+  created_at        DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+  encounter         opd_encounter      @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_note_workspace_encounter_tenant_fkey")
+  sections          opd_note_section[]
+
+  @@unique([note_workspace_id, clinic_id, branch_id, encounter_id], map: "opd_note_workspace_identity_uq")
+  @@unique([encounter_id, clinic_id, branch_id], map: "opd_note_workspace_encounter_uq")
+  @@index([clinic_id, branch_id, encounter_id], map: "opd_note_workspace_scope_idx")
+}
+
+// Independently versioned clinical note content. rich_content contains only the
+// restricted clinical-rich-text-v1 JSON AST; plain_text is derived server-side.
+model opd_note_section {
+  note_section_id   String             @id @default(uuid()) @db.Uuid
+  clinic_id         String             @db.VarChar(50)
+  branch_id         String             @db.VarChar(50)
+  encounter_id      String             @db.Uuid
+  note_workspace_id String             @db.Uuid
+  section_code      String             @db.VarChar(40)
+  content_schema    String             @default("clinical-rich-text-v1") @db.VarChar(40)
+  rich_content      Json
+  plain_text        String             @default("") @db.Text
+  status            String             @default("DRAFT") @db.VarChar(20)
+  version           Int                @default(1)
+  created_by        String             @db.VarChar(50)
+  updated_by        String             @db.VarChar(50)
+  created_at        DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+  note_workspace    opd_note_workspace @relation(fields: [note_workspace_id, clinic_id, branch_id, encounter_id], references: [note_workspace_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_note_section_workspace_identity_fkey")
+
+  @@unique([note_section_id, clinic_id, branch_id, encounter_id], map: "opd_note_section_identity_uq")
+  @@unique([note_workspace_id, section_code], map: "opd_note_section_workspace_code_uq")
+  @@index([clinic_id, branch_id, encounter_id, section_code, status], map: "opd_note_section_encounter_idx")
 }
 
 enum auditReferenceType {

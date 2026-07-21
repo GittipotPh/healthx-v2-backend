@@ -16,9 +16,17 @@ import { OpdRepository } from "./opd.repository";
 import { OpdView, toOpdView } from "./opd.mapper";
 import type { QueryOpdDto } from "./dto/query-opd.dto";
 import type { StartOpdDto } from "./dto/start-opd.dto";
-import { OpdWorkspaceView, StartOpdResult } from "./opd-v2.mapper";
+import {
+  OpdWorklistItemView,
+  OpdWorklistResult,
+  OpdWorkspaceView,
+  StartOpdResult,
+} from "./opd-v2.mapper";
 import type { Principal, RequestScope } from "../../auth/auth.types";
-import { bangkokBusinessDate } from "../../common/business-date";
+import {
+  bangkokBusinessDate,
+  isIsoBusinessDate,
+} from "../../common/business-date";
 import { PrismaService } from "../../prisma.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
 import {
@@ -26,6 +34,13 @@ import {
   TERMINAL_QUEUE_STEPS,
 } from "../queue/queue.constants";
 import { QueueService } from "../queue/queue.service";
+import { QueueRepository } from "../queue/queue.repository";
+import {
+  type QueueItemView,
+  toQueueItemView,
+  toWalkInQueueItemView,
+} from "../queue/queue.mapper";
+import type { QueryQueueDto } from "../queue/dto/query-queue.dto";
 
 const START_OPERATION = "OPD_START";
 const IDEMPOTENCY_LOCK_MS = 30_000;
@@ -52,6 +67,7 @@ export class OpdService {
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
     private readonly queueService: QueueService,
+    private readonly queueRepository: QueueRepository,
   ) {}
 
   async list(query: QueryOpdDto, scope: RequestScope): Promise<OpdListResult> {
@@ -70,6 +86,79 @@ export class OpdService {
   ): Promise<OpdView[]> {
     const rows = await this.repository.findHistoryByCustomer(customerId, scope);
     return rows.map(toOpdView);
+  }
+
+  async worklist(
+    query: QueryQueueDto,
+    scope: RequestScope,
+  ): Promise<OpdWorklistResult> {
+    const date = query.date ?? bangkokBusinessDate();
+    if (!isIsoBusinessDate(date)) {
+      throw new BadRequestException(
+        "date must be a valid YYYY-MM-DD calendar date",
+      );
+    }
+
+    const [appointmentRecords, walkIns] = await Promise.all([
+      this.repository.findWorklistTickets(scope.clinicId, scope.branchId, date),
+      this.queueRepository.findWalkInQueue(
+        scope.clinicId,
+        scope.branchId,
+        date,
+      ),
+    ]);
+    const customerIds = Array.from(
+      new Set(
+        appointmentRecords.map((record) => record.appointment.customer_id),
+      ),
+    );
+    const histories = await this.queueRepository.findCustomersHistories(
+      scope.clinicId,
+      customerIds,
+    );
+    const now = new Date();
+    const appointmentItems = appointmentRecords.map((record, index) =>
+      this.requireStableTicket(
+        toQueueItemView(
+          record.appointment,
+          index,
+          histories[record.appointment.customer_id],
+          {
+            legacyQueueStatusId: record.ticket.legacy_queue_status_id,
+            currentStep: record.ticket.current_step,
+            queueTicketId: record.ticket.queue_ticket_id,
+            encounterId: record.encounterId,
+            displayNumber: record.ticket.display_number,
+            enteredAt: record.ticket.entered_at,
+          },
+          now,
+        ),
+      ),
+    );
+    const walkInItems = walkIns.map((walkIn) =>
+      this.requireStableTicket(toWalkInQueueItemView(walkIn, now)),
+    );
+    const items = [...appointmentItems, ...walkInItems].sort(
+      (left, right) =>
+        left.time.localeCompare(right.time) ||
+        left.queueNo.localeCompare(right.queueNo),
+    );
+    const byStep: Record<string, number> = {};
+    for (const item of items) {
+      const step = item.step ?? "unassigned";
+      byStep[step] = (byStep[step] ?? 0) + 1;
+    }
+
+    return {
+      date,
+      items,
+      facets: {
+        total: items.length,
+        appointments: appointmentItems.length,
+        walkIns: walkInItems.length,
+        byStep,
+      },
+    };
   }
 
   async start(
@@ -809,6 +898,15 @@ export class OpdService {
       );
     }
     return value;
+  }
+
+  private requireStableTicket(item: QueueItemView): OpdWorklistItemView {
+    if (!item.queueTicketId) {
+      throw new ConflictException(
+        "OPD worklist item is missing its stable queue ticket identity",
+      );
+    }
+    return { ...item, queueTicketId: item.queueTicketId };
   }
 
   private assertTicketIdentity(

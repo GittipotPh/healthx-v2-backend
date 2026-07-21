@@ -102,7 +102,9 @@ async function main(): Promise<void> {
           )
         `,
         );
-        const ticketAppointmentMismatches = await tx.$queryRaw<CountRow[]>(Prisma.sql`
+        const ticketAppointmentMismatches = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
           SELECT COUNT(*)::BIGINT AS count
           FROM opd_queue_ticket AS ticket
           LEFT JOIN appointment AS appointment
@@ -132,7 +134,9 @@ async function main(): Promise<void> {
             )
           )
         `);
-        const encounterTicketMismatches = await tx.$queryRaw<CountRow[]>(Prisma.sql`
+        const encounterTicketMismatches = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
           SELECT COUNT(*)::BIGINT AS count
           FROM opd_encounter AS encounter
           INNER JOIN opd_queue_ticket AS ticket
@@ -147,7 +151,9 @@ async function main(): Promise<void> {
                AND encounter.encounter_type IS DISTINCT FROM ticket.source_type
              )
         `);
-        const encounterLegacyOpdMismatches = await tx.$queryRaw<CountRow[]>(Prisma.sql`
+        const encounterLegacyOpdMismatches = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
           SELECT COUNT(*)::BIGINT AS count
           FROM opd_encounter AS encounter
           LEFT JOIN opd AS legacy_opd
@@ -175,7 +181,9 @@ async function main(): Promise<void> {
                WHEN encounter.workflow_status = 'CANCELLED' THEN 'CANCEL'
              END
         `);
-        const missingPhaseOneRoleGrants = await tx.$queryRaw<CountRow[]>(Prisma.sql`
+        const missingPhaseOneRoleGrants = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
           WITH required(role_id, permission_id) AS (
             VALUES
               ('DOCTOR'::role_enum, 'OPD_READ'),
@@ -192,13 +200,110 @@ async function main(): Promise<void> {
            AND granted.permission_id = required.permission_id
           WHERE granted.permission_id IS NULL
         `);
-        const unsafeLegacyOpdNumbers = await tx.$queryRaw<CountRow[]>(Prisma.sql`
+        const missingCorrectionPermission = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM permission
+            WHERE permission_id = 'OPD_CORRECT'
+          ) THEN 0 ELSE 1 END::BIGINT AS count
+        `);
+        const correctionChainMismatches = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM opd_examination AS revision
+          LEFT JOIN opd_examination AS source
+            ON source.examination_id = revision.supersedes_examination_id
+           AND source.clinic_id = revision.clinic_id
+           AND source.branch_id = revision.branch_id
+           AND source.encounter_id = revision.encounter_id
+          LEFT JOIN opd_examination AS root
+            ON root.examination_id = revision.corrects_examination_id
+           AND root.clinic_id = revision.clinic_id
+           AND root.branch_id = revision.branch_id
+           AND root.encounter_id = revision.encounter_id
+          WHERE revision.supersedes_examination_id IS NOT NULL
+            AND (
+              source.examination_id IS NULL
+              OR root.examination_id IS NULL
+              OR root.corrects_examination_id IS NOT NULL
+              OR root.supersedes_examination_id IS NOT NULL
+              OR (
+                source.examination_id IS DISTINCT FROM revision.corrects_examination_id
+                AND source.corrects_examination_id IS DISTINCT FROM revision.corrects_examination_id
+              )
+              OR (
+                revision.status = 'DRAFT'
+                AND (
+                  source.status IS DISTINCT FROM 'FINAL'
+                  OR source.version IS DISTINCT FROM revision.correction_source_version
+                )
+              )
+              OR (
+                revision.status IN ('FINAL', 'CORRECTED')
+                AND (
+                  source.status IS DISTINCT FROM 'CORRECTED'
+                  OR source.version IS DISTINCT FROM revision.correction_source_version + 1
+                )
+              )
+              OR revision.status NOT IN ('DRAFT', 'FINAL', 'CORRECTED')
+            )
+        `);
+        const clinicalNoteIntegrityMismatches = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM (
+            SELECT workspace.note_workspace_id::TEXT AS resource_id
+            FROM opd_note_workspace AS workspace
+            LEFT JOIN opd_encounter AS encounter
+              ON encounter.encounter_id = workspace.encounter_id
+             AND encounter.clinic_id = workspace.clinic_id
+             AND encounter.branch_id = workspace.branch_id
+            WHERE encounter.encounter_id IS NULL
+               OR workspace.selected_mode NOT IN ('FORM', 'FREE')
+               OR workspace.version < 1
+
+            UNION ALL
+
+            SELECT section.note_section_id::TEXT AS resource_id
+            FROM opd_note_section AS section
+            LEFT JOIN opd_note_workspace AS workspace
+              ON workspace.note_workspace_id = section.note_workspace_id
+             AND workspace.encounter_id = section.encounter_id
+             AND workspace.clinic_id = section.clinic_id
+             AND workspace.branch_id = section.branch_id
+            WHERE workspace.note_workspace_id IS NULL
+               OR section.section_code NOT IN (
+                 'CHIEF_COMPLAINT',
+                 'PHYSICAL_EXAMINATION',
+                 'DIAGNOSIS_NARRATIVE',
+                 'TREATMENT',
+                 'TREATMENT_PLAN',
+                 'ADDITIONAL_NOTES',
+                 'FREE_NOTE'
+               )
+               OR section.content_schema IS DISTINCT FROM 'clinical-rich-text-v1'
+               OR JSONB_TYPEOF(section.rich_content) IS DISTINCT FROM 'object'
+               OR section.rich_content ->> 'schema' IS DISTINCT FROM section.content_schema
+               OR section.status NOT IN ('DRAFT', 'FINAL', 'CORRECTED', 'VOID')
+               OR section.version < 1
+               OR CHAR_LENGTH(section.plain_text) > 50000
+          ) AS mismatch
+        `);
+        const unsafeLegacyOpdNumbers = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
           SELECT COUNT(*)::BIGINT AS count
           FROM opd
           WHERE opd_id ~ '^OPDV2-[0-9]{8}-[0-9]{6,}$'
             AND SUBSTRING(opd_id FROM 16)::NUMERIC >= 9007199254740991
         `);
-        const duplicateActiveDailyWalkIns = await tx.$queryRaw<CountRow[]>(Prisma.sql`
+        const duplicateActiveDailyWalkIns = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
           SELECT COUNT(*)::BIGINT AS count
           FROM (
             SELECT 1
@@ -210,7 +315,9 @@ async function main(): Promise<void> {
             HAVING COUNT(*) > 1
           ) AS duplicate_scope
         `);
-        const missingActiveWalkInIndex = await tx.$queryRaw<CountRow[]>(Prisma.sql`
+        const missingActiveWalkInIndex = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
           SELECT CASE WHEN EXISTS (
             SELECT 1
             FROM pg_index AS index_meta
@@ -291,7 +398,9 @@ async function main(): Promise<void> {
           validLegacyPairsMissingTicket: Number(
             candidateCounts[0]?.valid_missing ?? 0n,
           ),
-          invalidDateLegacyPairs: Number(candidateCounts[0]?.invalid_date ?? 0n),
+          invalidDateLegacyPairs: Number(
+            candidateCounts[0]?.invalid_date ?? 0n,
+          ),
           scopeMismatchedLegacyPairs: Number(scopeMismatches[0]?.count ?? 0n),
           legacyAppointmentsExcludedWithoutSameScopeQueueStatus: Number(
             excludedLegacyAppointments[0]?.count ?? 0n,
@@ -307,6 +416,15 @@ async function main(): Promise<void> {
           ),
           missingPhaseOneRoleGrants: Number(
             missingPhaseOneRoleGrants[0]?.count ?? 0n,
+          ),
+          missingCorrectionPermission: Number(
+            missingCorrectionPermission[0]?.count ?? 0n,
+          ),
+          correctionChainMismatches: Number(
+            correctionChainMismatches[0]?.count ?? 0n,
+          ),
+          clinicalNoteIntegrityMismatches: Number(
+            clinicalNoteIntegrityMismatches[0]?.count ?? 0n,
           ),
           unsafeLegacyOpdNumbers: Number(
             unsafeLegacyOpdNumbers[0]?.count ?? 0n,
@@ -343,6 +461,9 @@ async function main(): Promise<void> {
       report.encounterTicketIdentityMismatches > 0 ||
       report.encounterLegacyOpdMismatches > 0 ||
       report.missingPhaseOneRoleGrants > 0 ||
+      report.missingCorrectionPermission > 0 ||
+      report.correctionChainMismatches > 0 ||
+      report.clinicalNoteIntegrityMismatches > 0 ||
       report.unsafeLegacyOpdNumbers > 0 ||
       report.duplicateActiveDailyWalkIns > 0 ||
       report.missingActiveWalkInUniquenessIndex > 0 ||
@@ -356,6 +477,8 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(
+    `${error instanceof Error ? error.message : String(error)}\n`,
+  );
   process.exitCode = 1;
 });

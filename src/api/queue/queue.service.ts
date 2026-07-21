@@ -48,6 +48,20 @@ import {
   isIsoBusinessDate,
 } from "../../common/business-date";
 
+export class QueueTodayFacetsView {
+  @ApiProperty()
+  total!: number;
+
+  @ApiProperty()
+  appointments!: number;
+
+  @ApiProperty()
+  walkIns!: number;
+
+  @ApiProperty({ type: "object", additionalProperties: { type: "number" } })
+  byStep!: Record<string, number>;
+}
+
 export class QueueTodayResult {
   @ApiProperty({ description: "The day shown (YYYY-MM-DD)" })
   date!: string;
@@ -56,17 +70,11 @@ export class QueueTodayResult {
   items!: QueueItemView[];
 
   @ApiProperty({
-    type: "object",
-    additionalProperties: true,
+    type: QueueTodayFacetsView,
     description:
       "Counts from the same branch/day population returned by this worklist",
   })
-  facets!: {
-    total: number;
-    appointments: number;
-    walkIns: number;
-    byStep: Record<string, number>;
-  };
+  facets!: QueueTodayFacetsView;
 }
 
 export class QueueTransitionResult {

@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { QueueItemView } from "../queue/queue.mapper";
 
 export class StartOpdResult {
   @ApiProperty()
@@ -32,6 +33,40 @@ export class StartOpdResult {
     description: "true when the command returned an already-created encounter",
   })
   resumed!: boolean;
+}
+
+export class OpdWorklistItemView extends QueueItemView {
+  @ApiProperty({
+    type: String,
+    nullable: false,
+    description: "Stable app-owned queue ticket identity required by OPD V2",
+  })
+  declare queueTicketId: string;
+}
+
+export class OpdWorklistFacetsView {
+  @ApiProperty()
+  total!: number;
+
+  @ApiProperty()
+  appointments!: number;
+
+  @ApiProperty()
+  walkIns!: number;
+
+  @ApiProperty({ type: "object", additionalProperties: { type: "number" } })
+  byStep!: Record<string, number>;
+}
+
+export class OpdWorklistResult {
+  @ApiProperty({ description: "Bangkok business date (YYYY-MM-DD)" })
+  date!: string;
+
+  @ApiProperty({ type: [OpdWorklistItemView] })
+  items!: OpdWorklistItemView[];
+
+  @ApiProperty({ type: OpdWorklistFacetsView })
+  facets!: OpdWorklistFacetsView;
 }
 
 export class OpdWorkspaceContextView {

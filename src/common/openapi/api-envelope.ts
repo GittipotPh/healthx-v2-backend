@@ -3,6 +3,7 @@ import {
   ApiDefaultResponse,
   ApiExtraModels,
   ApiProperty,
+  ApiPropertyOptional,
   ApiResponse,
   getSchemaPath,
 } from "@nestjs/swagger";
@@ -22,12 +23,31 @@ export class ApiErrorEnvelope {
   @ApiProperty({
     enum: ["8999", "9999"],
     enumName: "ApiErrorStatus",
-    description: '"8999" = known/business error (HttpException), "9999" = unexpected/technical error',
+    description:
+      '"8999" = known/business error (HttpException), "9999" = unexpected/technical error',
   })
   status!: "8999" | "9999";
 
   @ApiProperty({ description: "Human-readable error message" })
   message!: string;
+
+  @ApiPropertyOptional({ description: "Stable business error code" })
+  code?: string;
+
+  @ApiPropertyOptional({ description: "Conflicted resource type" })
+  resourceType?: string;
+
+  @ApiPropertyOptional({ description: "Conflicted resource identity" })
+  resourceId?: string;
+
+  @ApiPropertyOptional({ description: "Current server resource version" })
+  currentVersion?: number;
+
+  @ApiPropertyOptional({ description: "Current server resource status" })
+  currentStatus?: string;
+
+  @ApiPropertyOptional({ description: "Current server update timestamp" })
+  updatedAt?: string;
 }
 
 export interface EnvelopeResponseOptions {
@@ -36,7 +56,9 @@ export interface EnvelopeResponseOptions {
   description?: string;
 }
 
-function envelopeSchema(dataSchema: Record<string, unknown>): Record<string, unknown> {
+function envelopeSchema(
+  dataSchema: Record<string, unknown>,
+): Record<string, unknown> {
   return {
     type: "object",
     required: ["status", "data"],
@@ -60,7 +82,8 @@ export function BaseOpenApiResponse<TModel extends Type<unknown>>(
     ApiExtraModels(model),
     ApiResponse({
       status: options.status ?? 200,
-      description: options.description ?? `Success envelope wrapping ${model.name}`,
+      description:
+        options.description ?? `Success envelope wrapping ${model.name}`,
       schema: envelopeSchema({ $ref: getSchemaPath(model) }),
     }),
   );
@@ -75,7 +98,8 @@ export function BaseOpenApiArrayResponse<TModel extends Type<unknown>>(
     ApiExtraModels(model),
     ApiResponse({
       status: options.status ?? 200,
-      description: options.description ?? `Success envelope wrapping ${model.name}[]`,
+      description:
+        options.description ?? `Success envelope wrapping ${model.name}[]`,
       schema: envelopeSchema({
         type: "array",
         items: { $ref: getSchemaPath(model) },
@@ -93,7 +117,8 @@ export function BaseOpenApiErrorResponses(): MethodDecorator & ClassDecorator {
   return applyDecorators(
     ApiExtraModels(ApiErrorEnvelope),
     ApiDefaultResponse({
-      description: 'Error envelope — any 4xx/5xx: { status: "8999" | "9999", message }',
+      description:
+        'Error envelope — any 4xx/5xx: { status: "8999" | "9999", message }',
       schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
     }),
   );

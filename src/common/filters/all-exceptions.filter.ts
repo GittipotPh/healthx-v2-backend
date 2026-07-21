@@ -11,6 +11,12 @@ import type { Response } from "express";
 interface ErrorResponse {
   status: "8999" | "9999";
   message: string;
+  code?: string;
+  resourceType?: string;
+  resourceId?: string;
+  currentVersion?: number;
+  currentStatus?: string;
+  updatedAt?: string;
 }
 
 /**
@@ -28,18 +34,25 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     if (exception instanceof HttpException) {
       const httpStatus = exception.getStatus();
+      const details = this.extractDetails(exception);
       const body: ErrorResponse = {
         status: "8999",
         message: this.extractMessage(exception),
+        ...details,
       };
       response.status(httpStatus).json(body);
       return;
     }
 
     this.logger.error(
-      exception instanceof Error ? exception.stack ?? exception.message : String(exception),
+      exception instanceof Error
+        ? (exception.stack ?? exception.message)
+        : String(exception),
     );
-    const body: ErrorResponse = { status: "9999", message: "Internal server error" };
+    const body: ErrorResponse = {
+      status: "9999",
+      message: "Internal server error",
+    };
     response.status(HttpStatus.INTERNAL_SERVER_ERROR).json(body);
   }
 
@@ -58,5 +71,32 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     }
     return exception.message;
+  }
+
+  private extractDetails(
+    exception: HttpException,
+  ): Omit<ErrorResponse, "status" | "message"> {
+    const response = exception.getResponse();
+    if (typeof response !== "object" || response === null) return {};
+
+    const candidate = response as Record<string, unknown>;
+    return {
+      ...(typeof candidate.code === "string" ? { code: candidate.code } : {}),
+      ...(typeof candidate.resourceType === "string"
+        ? { resourceType: candidate.resourceType }
+        : {}),
+      ...(typeof candidate.resourceId === "string"
+        ? { resourceId: candidate.resourceId }
+        : {}),
+      ...(typeof candidate.currentVersion === "number"
+        ? { currentVersion: candidate.currentVersion }
+        : {}),
+      ...(typeof candidate.currentStatus === "string"
+        ? { currentStatus: candidate.currentStatus }
+        : {}),
+      ...(typeof candidate.updatedAt === "string"
+        ? { updatedAt: candidate.updatedAt }
+        : {}),
+    };
   }
 }

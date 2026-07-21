@@ -10,6 +10,7 @@ import type { PrismaService } from "../../prisma.service";
 import type { OpdRepository } from "./opd.repository";
 import { OpdService } from "./opd.service";
 import type { QueueService } from "../queue/queue.service";
+import type { QueueRepository } from "../queue/queue.repository";
 
 const SCOPE: RequestScope = {
   userId: "user-1",
@@ -55,6 +56,7 @@ function makeService() {
   const repository = {
     findMany: jest.fn(),
     findHistoryByCustomer: jest.fn(),
+    findWorklistTickets: jest.fn().mockResolvedValue([]),
     findIdempotency: jest.fn().mockResolvedValue(null),
     createIdempotency: jest
       .fn()
@@ -108,17 +110,159 @@ function makeService() {
   const queueService = {
     startEncounter: jest.fn().mockResolvedValue(undefined),
   } as unknown as QueueService;
+  const queueRepository = {
+    findWalkInQueue: jest.fn().mockResolvedValue([]),
+    findCustomersHistories: jest.fn().mockResolvedValue({}),
+  } as unknown as QueueRepository;
   const service = new OpdService(
     repository as unknown as OpdRepository,
     prisma,
     auditLogService,
     queueService,
+    queueRepository,
   );
-  return { service, repository, prisma, auditLogService, queueService };
+  return {
+    service,
+    repository,
+    prisma,
+    auditLogService,
+    queueService,
+    queueRepository,
+  };
 }
 
 afterEach(() => {
   jest.useRealTimers();
+});
+
+describe("OpdService.worklist", () => {
+  it("rejects an invalid calendar date before reading either population", async () => {
+    const { service, repository, queueRepository } = makeService();
+
+    await expect(
+      service.worklist({ date: "2026-02-31" }, SCOPE),
+    ).rejects.toThrow(BadRequestException);
+    expect(repository.findWorklistTickets).not.toHaveBeenCalled();
+    expect(queueRepository.findWalkInQueue).not.toHaveBeenCalled();
+  });
+
+  it("returns a same-scope ticketed appointment with a required stable identity", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-07-18T03:30:00.000Z"));
+    const { service, repository, queueRepository } = makeService();
+    repository.findWorklistTickets.mockResolvedValue([
+      {
+        appointment: {
+          appointment_id: "appointment-1",
+          clinic_id: SCOPE.clinicId,
+          branch_id: SCOPE.branchId,
+          customer_id: "customer-1",
+          room: "Room 1",
+          channel: "LINE",
+          date_appointment: "2026-07-18",
+          time_arrive: "09:00",
+          start_time: "09:00",
+          end_time: "09:30",
+          is_consult: true,
+          apply_anesthetic: false,
+          appointment_detail: "Consultation",
+          status_appointment: statusAppointment.ARRIVED,
+          opd_id: null,
+          customer: {
+            name: "Ticketed",
+            lastname: "Patient",
+            personal_id: "HN-1",
+            nickname: null,
+            phone_number: null,
+            gender: "FEMALE",
+            customer_image: null,
+            customer_info: { allergy: null },
+          },
+          opd: null,
+        },
+        ticket: {
+          queue_ticket_id: "ticket-1",
+          legacy_queue_status_id: "legacy-queue-1",
+          current_step: "ARRIVED",
+          display_number: "Q007",
+          entered_at: new Date("2026-07-18T03:15:00.000Z"),
+        },
+        encounterId: null,
+      },
+    ]);
+    jest
+      .spyOn(queueRepository, "findCustomersHistories")
+      .mockResolvedValue({
+        "customer-1": {
+          cancelHistory: 1,
+          lateHistory: 2,
+          rescheduleHistory: 3,
+        },
+      });
+
+    const result = await service.worklist({ date: "2026-07-18" }, SCOPE);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toEqual(
+      expect.objectContaining({
+        appointmentId: "appointment-1",
+        customerId: "customer-1",
+        queueTicketId: "ticket-1",
+        queueNo: "Q007",
+        waitMinutes: 15,
+      }),
+    );
+    expect(result.facets).toEqual({
+      total: 1,
+      appointments: 1,
+      walkIns: 0,
+      byStep: { arrived: 1 },
+    });
+  });
+
+  it("keeps a reconciled ticketed walk-in in the OPD population", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-07-18T03:30:00.000Z"));
+    const { service, queueRepository } = makeService();
+    jest.spyOn(queueRepository, "findWalkInQueue").mockResolvedValue([
+      {
+        queue_ticket_id: "ticket-walk-in-1",
+        legacy_queue_status_id: null,
+        customer_id: "customer-2",
+        display_number: "Q008",
+        current_step: "IN_SERVICE",
+        entered_at: new Date("2026-07-18T03:20:00.000Z"),
+        version: 2,
+        encounter_id: "encounter-walk-in-1",
+        legacy_opd_id: "OPDV2-20260718-000008",
+        opd_status: "PENDING",
+        customer: {
+          name: "Walk",
+          lastname: "In",
+          personal_id: "",
+          nickname: null,
+          phone_number: null,
+          gender: "FEMALE",
+          customer_image: null,
+          allergy: null,
+        },
+      },
+    ]);
+
+    const result = await service.worklist({ date: "2026-07-18" }, SCOPE);
+
+    expect(result.items[0]).toEqual(
+      expect.objectContaining({
+        appointmentId: null,
+        queueTicketId: "ticket-walk-in-1",
+        encounterId: "encounter-walk-in-1",
+      }),
+    );
+    expect(result.facets).toEqual({
+      total: 1,
+      appointments: 0,
+      walkIns: 1,
+      byStep: { "in-service": 1 },
+    });
+  });
 });
 
 describe("OpdService.start", () => {
@@ -331,6 +475,7 @@ describe("OpdService.start", () => {
   });
 
   it("resumes the customer's active walk-in for the same Bangkok business date", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-07-17T18:30:00.000Z"));
     const { service, repository, queueService, auditLogService } =
       makeService();
     const activeWalkIn = {
@@ -374,6 +519,7 @@ describe("OpdService.start", () => {
   });
 
   it("retries a concurrent active walk-in unique conflict and resumes the winner", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-07-17T18:30:00.000Z"));
     const { service, repository, prisma, queueService } = makeService();
     const activeWalkIn = {
       ...ENCOUNTER,
@@ -429,6 +575,7 @@ describe("OpdService.start", () => {
   });
 
   it("rejects a terminal pre-existing legacy OPD instead of opening a V2 encounter around it", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-07-17T18:30:00.000Z"));
     const { service, repository, auditLogService } = makeService();
     repository.findAppointmentForStart.mockResolvedValue({
       appointment_id: "appointment-1",
