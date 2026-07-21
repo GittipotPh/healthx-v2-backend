@@ -2338,6 +2338,7 @@ model opd_encounter {
   examinations           opd_examination[]
   diagnosis_section      opd_diagnosis_section?
   note_workspace         opd_note_workspace?
+  orders                 opd_order[]
 
   @@unique([encounter_id, clinic_id, branch_id], map: "opd_encounter_tenant_uq")
   @@unique([queue_ticket_id, clinic_id, branch_id], map: "opd_encounter_queue_ticket_uq")
@@ -2676,6 +2677,102 @@ model opd_note_section {
   @@unique([note_section_id, clinic_id, branch_id, encounter_id], map: "opd_note_section_identity_uq")
   @@unique([note_workspace_id, section_code], map: "opd_note_section_workspace_code_uq")
   @@index([clinic_id, branch_id, encounter_id, section_code, status], map: "opd_note_section_encounter_idx")
+}
+
+// Phase 3A exposes one app-owned draft order set per encounter. Release and all
+// legacy prescription/sale/inventory/course effects remain deliberately absent.
+model opd_order {
+  order_id              String           @id @default(uuid()) @db.Uuid
+  clinic_id             String           @db.VarChar(50)
+  branch_id             String           @db.VarChar(50)
+  encounter_id          String           @db.Uuid
+  status                String           @default("DRAFT") @db.VarChar(20)
+  currency              String           @default("THB") @db.VarChar(3)
+  subtotal_amount       Decimal          @default(0) @db.Decimal(14, 2)
+  discount_total_amount Decimal          @default(0) @db.Decimal(14, 2)
+  tax_total_amount      Decimal          @default(0) @db.Decimal(14, 2)
+  net_total_amount      Decimal          @default(0) @db.Decimal(14, 2)
+  version               Int              @default(1)
+  created_by            String           @db.VarChar(50)
+  updated_by            String           @db.VarChar(50)
+  created_at            DateTime         @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime         @default(now()) @updatedAt @db.Timestamptz(6)
+  encounter             opd_encounter    @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_encounter_tenant_fkey")
+  items                 opd_order_item[]
+
+  @@unique([order_id, clinic_id, branch_id, encounter_id], map: "opd_order_identity_uq")
+  @@unique([encounter_id, clinic_id, branch_id], map: "opd_order_encounter_uq")
+  @@index([clinic_id, branch_id, encounter_id, status], map: "opd_order_scope_idx")
+}
+
+// Legacy catalog references remain scalar snapshots so draft orders cannot
+// introduce a database dependency on HealthX-owned product/course tables.
+model opd_order_item {
+  order_item_id          String                      @id @default(uuid()) @db.Uuid
+  clinic_id              String                      @db.VarChar(50)
+  branch_id              String                      @db.VarChar(50)
+  encounter_id           String                      @db.Uuid
+  order_id               String                      @db.Uuid
+  display_order          Int
+  source_type            String                      @db.VarChar(20)
+  source_id              String                      @db.VarChar(50)
+  source_parent_id       String?                     @db.VarChar(50)
+  source_code            String                      @db.VarChar(50)
+  category               String                      @db.VarChar(30)
+  name_snapshot          String                      @db.VarChar(300)
+  description_snapshot   String?                     @db.VarChar(1000)
+  unit_snapshot          String                      @db.VarChar(250)
+  quantity               Decimal                     @db.Decimal(10, 2)
+  unit_price_amount      Decimal                     @db.Decimal(14, 2)
+  pricing_source         String                      @db.VarChar(20)
+  tax_type_snapshot      String?                     @db.VarChar(30)
+  gross_amount           Decimal                     @db.Decimal(14, 2)
+  discount_amount        Decimal                     @default(0) @db.Decimal(14, 2)
+  tax_amount             Decimal                     @default(0) @db.Decimal(14, 2)
+  net_amount             Decimal                     @db.Decimal(14, 2)
+  note                   String?                     @db.VarChar(2000)
+  status                 String                      @default("ACTIVE") @db.VarChar(20)
+  version                Int                         @default(1)
+  void_reason            String?                     @db.VarChar(500)
+  voided_by              String?                     @db.VarChar(50)
+  voided_at              DateTime?                   @db.Timestamptz(6)
+  created_by             String                      @db.VarChar(50)
+  updated_by             String                      @db.VarChar(50)
+  created_at             DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                    @default(now()) @updatedAt @db.Timestamptz(6)
+  order                  opd_order                   @relation(fields: [order_id, clinic_id, branch_id, encounter_id], references: [order_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_order_item_order_identity_fkey")
+  medication_instruction opd_medication_instruction?
+
+  @@unique([order_item_id, clinic_id, branch_id, encounter_id, order_id], map: "opd_order_item_identity_uq")
+  @@unique([order_id, display_order], map: "opd_order_item_display_order_uq")
+  @@index([clinic_id, branch_id, encounter_id, order_id, status], map: "opd_order_item_scope_idx")
+  @@index([source_type, source_id], map: "opd_order_item_source_idx")
+}
+
+model opd_medication_instruction {
+  medication_instruction_id String         @id @default(uuid()) @db.Uuid
+  clinic_id                 String         @db.VarChar(50)
+  branch_id                 String         @db.VarChar(50)
+  encounter_id              String         @db.Uuid
+  order_id                  String         @db.Uuid
+  order_item_id             String         @db.Uuid
+  dose                      String?        @db.VarChar(100)
+  route                     String?        @db.VarChar(100)
+  frequency                 String?        @db.VarChar(200)
+  timing                    String?        @db.VarChar(200)
+  duration_value            Decimal?       @db.Decimal(10, 2)
+  duration_unit             String?        @db.VarChar(30)
+  sig_text                  String         @db.VarChar(1000)
+  note                      String?        @db.VarChar(2000)
+  created_by                String         @db.VarChar(50)
+  updated_by                String         @db.VarChar(50)
+  created_at                DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at                DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
+  order_item                opd_order_item @relation(fields: [order_item_id, clinic_id, branch_id, encounter_id, order_id], references: [order_item_id, clinic_id, branch_id, encounter_id, order_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_medication_instruction_item_identity_fkey")
+
+  @@unique([medication_instruction_id, clinic_id, branch_id, encounter_id, order_id, order_item_id], map: "opd_medication_instruction_identity_uq")
+  @@unique([order_item_id, clinic_id, branch_id, encounter_id, order_id], map: "opd_medication_instruction_item_uq")
+  @@index([clinic_id, branch_id, encounter_id, order_id], map: "opd_medication_instruction_scope_idx")
 }
 
 enum auditReferenceType {

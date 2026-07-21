@@ -29,6 +29,10 @@ async function main(): Promise<void> {
         const ticketCount = await tx.opd_queue_ticket.count();
         const encounterCount = await tx.opd_encounter.count();
         const intakeCount = await tx.opd_intake.count();
+        const orderCount = await tx.opd_order.count();
+        const orderItemCount = await tx.opd_order_item.count();
+        const medicationInstructionCount =
+          await tx.opd_medication_instruction.count();
         const candidateCounts = await tx.$queryRaw<BackfillCandidateCountRow[]>(
           Prisma.sql`
           WITH candidate AS (
@@ -330,6 +334,132 @@ async function main(): Promise<void> {
              OR intake.version < 1
         `,
         );
+        const orderIntegrityMismatches = await tx.$queryRaw<CountRow[]>(
+          Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM (
+            SELECT draft_order.order_id::TEXT AS resource_id
+            FROM opd_order AS draft_order
+            LEFT JOIN opd_encounter AS encounter
+              ON encounter.encounter_id = draft_order.encounter_id
+             AND encounter.clinic_id = draft_order.clinic_id
+             AND encounter.branch_id = draft_order.branch_id
+            LEFT JOIN LATERAL (
+              SELECT COALESCE(SUM(item.gross_amount), 0) AS subtotal
+              FROM opd_order_item AS item
+              WHERE item.order_id = draft_order.order_id
+                AND item.encounter_id = draft_order.encounter_id
+                AND item.clinic_id = draft_order.clinic_id
+                AND item.branch_id = draft_order.branch_id
+                AND item.status = 'ACTIVE'
+            ) AS item_total ON TRUE
+            WHERE encounter.encounter_id IS NULL
+               OR draft_order.status IS DISTINCT FROM 'DRAFT'
+               OR draft_order.currency IS DISTINCT FROM 'THB'
+               OR draft_order.version < 1
+               OR draft_order.subtotal_amount < 0
+               OR draft_order.discount_total_amount IS DISTINCT FROM 0::DECIMAL
+               OR draft_order.tax_total_amount IS DISTINCT FROM 0::DECIMAL
+               OR draft_order.net_total_amount IS DISTINCT FROM draft_order.subtotal_amount
+               OR draft_order.subtotal_amount IS DISTINCT FROM item_total.subtotal
+
+            UNION ALL
+
+            SELECT item.order_item_id::TEXT AS resource_id
+            FROM opd_order_item AS item
+            LEFT JOIN opd_order AS draft_order
+              ON draft_order.order_id = item.order_id
+             AND draft_order.encounter_id = item.encounter_id
+             AND draft_order.clinic_id = item.clinic_id
+             AND draft_order.branch_id = item.branch_id
+            WHERE draft_order.order_id IS NULL
+               OR item.display_order < 1
+               OR item.source_type NOT IN ('PRODUCT', 'COURSE_ITEM')
+               OR item.category NOT IN (
+                 'MEDICINE', 'DRUG', 'TOOL', 'PRODUCT', 'CONSUMABLES', 'COURSE'
+               )
+               OR (
+                 item.source_type = 'COURSE_ITEM'
+                 AND item.category IS DISTINCT FROM 'COURSE'
+               )
+               OR (
+                 item.source_type = 'PRODUCT'
+                 AND item.category = 'COURSE'
+               )
+               OR NULLIF(BTRIM(item.source_id), '') IS NULL
+               OR NULLIF(BTRIM(item.source_code), '') IS NULL
+               OR NULLIF(BTRIM(item.name_snapshot), '') IS NULL
+               OR NULLIF(BTRIM(item.unit_snapshot), '') IS NULL
+               OR item.quantity <= 0
+               OR item.unit_price_amount < 0
+               OR item.pricing_source NOT IN ('BASE', 'PROMOTION')
+               OR (
+                 item.tax_type_snapshot IS NOT NULL
+                 AND item.tax_type_snapshot NOT IN (
+                   'INCLUDE_VAT', 'EXCLUDE_VAT', 'NO_VAT'
+                 )
+               )
+               OR item.gross_amount IS DISTINCT FROM ROUND(
+                 item.quantity * item.unit_price_amount,
+                 2
+               )
+               OR item.discount_amount IS DISTINCT FROM 0::DECIMAL
+               OR item.tax_amount IS DISTINCT FROM 0::DECIMAL
+               OR item.net_amount IS DISTINCT FROM item.gross_amount
+               OR item.status NOT IN ('ACTIVE', 'VOID')
+               OR item.version < 1
+               OR (
+                 item.status = 'ACTIVE'
+                 AND (
+                   item.void_reason IS NOT NULL
+                   OR item.voided_by IS NOT NULL
+                   OR item.voided_at IS NOT NULL
+                 )
+               )
+               OR (
+                 item.status = 'VOID'
+                 AND (item.voided_by IS NULL OR item.voided_at IS NULL)
+               )
+               OR (
+                 item.category IN ('MEDICINE', 'DRUG')
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM opd_medication_instruction AS instruction
+                   WHERE instruction.order_item_id = item.order_item_id
+                     AND instruction.order_id = item.order_id
+                     AND instruction.encounter_id = item.encounter_id
+                     AND instruction.clinic_id = item.clinic_id
+                     AND instruction.branch_id = item.branch_id
+                 )
+               )
+
+            UNION ALL
+
+            SELECT instruction.medication_instruction_id::TEXT AS resource_id
+            FROM opd_medication_instruction AS instruction
+            LEFT JOIN opd_order_item AS item
+              ON item.order_item_id = instruction.order_item_id
+             AND item.order_id = instruction.order_id
+             AND item.encounter_id = instruction.encounter_id
+             AND item.clinic_id = instruction.clinic_id
+             AND item.branch_id = instruction.branch_id
+            WHERE item.order_item_id IS NULL
+               OR item.category NOT IN ('MEDICINE', 'DRUG')
+               OR NULLIF(BTRIM(instruction.sig_text), '') IS NULL
+               OR (
+                 instruction.duration_value IS NULL
+                 AND instruction.duration_unit IS NOT NULL
+               )
+               OR (
+                 instruction.duration_value IS NOT NULL
+                 AND (
+                   instruction.duration_value <= 0
+                   OR NULLIF(BTRIM(instruction.duration_unit), '') IS NULL
+                 )
+               )
+          ) AS mismatch
+        `,
+        );
         const unsafeLegacyOpdNumbers = await tx.$queryRaw<
           CountRow[]
         >(Prisma.sql`
@@ -433,6 +563,9 @@ async function main(): Promise<void> {
           queueTickets: ticketCount,
           encounters: encounterCount,
           intakeRows: intakeCount,
+          orderRows: orderCount,
+          orderItemRows: orderItemCount,
+          medicationInstructionRows: medicationInstructionCount,
           validLegacyPairsMissingTicket: Number(
             candidateCounts[0]?.valid_missing ?? 0n,
           ),
@@ -466,6 +599,9 @@ async function main(): Promise<void> {
           ),
           intakeIntegrityMismatches: Number(
             intakeIntegrityMismatches[0]?.count ?? 0n,
+          ),
+          orderIntegrityMismatches: Number(
+            orderIntegrityMismatches[0]?.count ?? 0n,
           ),
           unsafeLegacyOpdNumbers: Number(
             unsafeLegacyOpdNumbers[0]?.count ?? 0n,
@@ -506,6 +642,7 @@ async function main(): Promise<void> {
       report.correctionChainMismatches > 0 ||
       report.clinicalNoteIntegrityMismatches > 0 ||
       report.intakeIntegrityMismatches > 0 ||
+      report.orderIntegrityMismatches > 0 ||
       report.unsafeLegacyOpdNumbers > 0 ||
       report.duplicateActiveDailyWalkIns > 0 ||
       report.missingActiveWalkInUniquenessIndex > 0 ||

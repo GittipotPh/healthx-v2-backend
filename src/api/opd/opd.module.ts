@@ -19,6 +19,9 @@ import { OpdClinicalIntakeService } from "./opd-clinical-intake.service";
 import { OpdClinicalNoteController } from "./opd-clinical-note.controller";
 import { OpdClinicalNoteRepository } from "./opd-clinical-note.repository";
 import { OpdClinicalNoteService } from "./opd-clinical-note.service";
+import { OpdOrderController } from "./opd-order.controller";
+import { OpdOrderRepository } from "./opd-order.repository";
+import { OpdOrderService } from "./opd-order.service";
 
 @Module({
   imports: [AuditLogModule, QueueModule],
@@ -28,6 +31,7 @@ import { OpdClinicalNoteService } from "./opd-clinical-note.service";
     OpdClinicalSectionController,
     OpdClinicalHistoryController,
     OpdClinicalNoteController,
+    OpdOrderController,
   ],
   providers: [
     OpdService,
@@ -42,6 +46,8 @@ import { OpdClinicalNoteService } from "./opd-clinical-note.service";
     OpdClinicalIntakeRepository,
     OpdClinicalNoteService,
     OpdClinicalNoteRepository,
+    OpdOrderService,
+    OpdOrderRepository,
     OpdV2EnabledGuard,
   ],
   exports: [OpdService],

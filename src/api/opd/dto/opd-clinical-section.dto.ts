@@ -257,6 +257,12 @@ export class OpdDraftExpectedVersionsDto {
   @IsOptional()
   @ValidateNested()
   @Type(() => OpdExpectedResourceVersionDto)
+  order?: OpdExpectedResourceVersionDto;
+
+  @ApiPropertyOptional({ type: OpdExpectedResourceVersionDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => OpdExpectedResourceVersionDto)
   noteWorkspace?: OpdExpectedResourceVersionDto;
 
   @ApiProperty({ type: [OpdExpectedNoteSectionVersionDto], maxItems: 7 })

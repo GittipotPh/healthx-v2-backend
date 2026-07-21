@@ -543,6 +543,11 @@ export class OpdClinicalSectionService {
       current.diagnoses,
     );
     this.assertExpectedDraftResource(
+      "OPD_ORDER",
+      expected.order,
+      current.order,
+    );
+    this.assertExpectedDraftResource(
       "OPD_NOTE_WORKSPACE",
       expected.noteWorkspace,
       current.noteWorkspace,

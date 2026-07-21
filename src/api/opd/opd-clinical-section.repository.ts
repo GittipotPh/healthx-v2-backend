@@ -31,6 +31,7 @@ export interface DraftResourceVersionState {
   intake: DraftResourceVersion | null;
   symptoms: DraftResourceVersion | null;
   diagnoses: DraftResourceVersion | null;
+  order: DraftResourceVersion | null;
   noteWorkspace: DraftResourceVersion | null;
   noteSections: DraftNoteSectionVersion[];
 }
@@ -293,6 +294,13 @@ export class OpdClinicalSectionRepository {
         branch_id: scope.branchId,
       },
     });
+    const order = await tx.opd_order.findFirst({
+      where: {
+        encounter_id: encounterId,
+        clinic_id: scope.clinicId,
+        branch_id: scope.branchId,
+      },
+    });
     const noteWorkspace = await tx.opd_note_workspace.findFirst({
       where: {
         encounter_id: encounterId,
@@ -341,6 +349,14 @@ export class OpdClinicalSectionRepository {
             diagnoses: {
               id: diagnosis.diagnosis_section_id,
               version: diagnosis.version,
+            },
+          }
+        : {}),
+      ...(order
+        ? {
+            order: {
+              id: order.order_id,
+              version: order.version,
             },
           }
         : {}),
@@ -399,6 +415,14 @@ export class OpdClinicalSectionRepository {
             version: diagnosis.version,
             status: diagnosis.status,
             updatedAt: diagnosis.updated_at,
+          }
+        : null,
+      order: order
+        ? {
+            id: order.order_id,
+            version: order.version,
+            status: order.status,
+            updatedAt: order.updated_at,
           }
         : null,
       noteWorkspace: noteWorkspace

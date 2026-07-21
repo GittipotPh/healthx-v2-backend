@@ -102,6 +102,7 @@ async function makeService() {
         updatedAt: NOW,
       },
       diagnoses: null,
+      order: null,
       noteWorkspace: null,
       noteSections: [],
     }),
@@ -428,6 +429,7 @@ describe("OpdClinicalSectionService", () => {
       intake: null,
       symptoms: null,
       diagnoses: null,
+      order: null,
       noteWorkspace: {
         id: noteWorkspaceId,
         version: 1,
@@ -476,6 +478,60 @@ describe("OpdClinicalSectionService", () => {
         resourceType: "OPD_NOTE_SECTION",
         resourceId: noteSectionId,
         currentVersion: 3,
+      }),
+    );
+    expect(repository.createDraftCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("rejects a draft checkpoint when the expected order version is stale", async () => {
+    const { service, repository } = await makeService();
+    const orderId = "88888888-8888-4888-8888-888888888888";
+    repository.buildResourceVersionManifest.mockResolvedValue({
+      manifest: {
+        encounter: { id: ENCOUNTER_ID, version: ENCOUNTER.version },
+        order: { id: orderId, version: 4 },
+        noteSections: [],
+      },
+      examination: null,
+      vitals: null,
+      intake: null,
+      symptoms: null,
+      diagnoses: null,
+      order: {
+        id: orderId,
+        version: 4,
+        status: "DRAFT",
+        updatedAt: NOW,
+      },
+      noteWorkspace: null,
+      noteSections: [],
+    });
+
+    let caught: unknown;
+    try {
+      await service.createDraftCheckpoint(
+        ENCOUNTER_ID,
+        {
+          expectedVersions: {
+            encounter: { id: ENCOUNTER_ID, version: ENCOUNTER.version },
+            order: { id: orderId, version: 3 },
+            noteSections: [],
+          },
+        },
+        SCOPE,
+        PRINCIPAL,
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(VersionConflictException);
+    if (!(caught instanceof VersionConflictException)) throw caught;
+    expect(caught.getResponse()).toEqual(
+      expect.objectContaining({
+        resourceType: "OPD_ORDER",
+        resourceId: orderId,
+        currentVersion: 4,
       }),
     );
     expect(repository.createDraftCheckpoint).not.toHaveBeenCalled();
