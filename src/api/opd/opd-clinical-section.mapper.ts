@@ -1,5 +1,6 @@
 import { ApiProperty } from "@nestjs/swagger";
 import type { Prisma } from "@prisma/client";
+import { OpdDraftCopySectionCode } from "./dto/opd-draft-library.dto";
 
 export type OpdSymptomSectionRecord = Prisma.opd_symptom_sectionGetPayload<{
   include: {
@@ -200,6 +201,21 @@ export class OpdDraftCheckpointView {
 
   @ApiProperty()
   createdAt!: string;
+
+  @ApiProperty()
+  draftSnapshotId?: string;
+
+  @ApiProperty({ enum: ["opd-draft-copy-v1"] })
+  snapshotSchemaVersion?: "opd-draft-copy-v1";
+
+  @ApiProperty()
+  snapshotContentSha256?: string;
+
+  @ApiProperty({ enum: OpdDraftCopySectionCode, isArray: true })
+  availableSections?: OpdDraftCopySectionCode[];
+
+  @ApiProperty()
+  isReusable?: boolean;
 }
 
 export function toOpdSymptomSectionView(

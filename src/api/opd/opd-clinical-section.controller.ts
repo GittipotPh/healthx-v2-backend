@@ -18,7 +18,6 @@ import {
 } from "../../common/openapi/api-envelope";
 import {
   CreateOpdClinicalSectionDto,
-  CreateOpdDraftCheckpointDto,
   PatchOpdDiagnosisSectionDto,
   PatchOpdSymptomSectionDto,
 } from "./dto/opd-clinical-section.dto";
@@ -27,7 +26,6 @@ import {
   CreateOpdSymptomSectionResult,
   OpdDiagnosisSectionResult,
   OpdDiagnosisSectionView,
-  OpdDraftCheckpointView,
   OpdSymptomSectionResult,
   OpdSymptomSectionView,
 } from "./opd-clinical-section.mapper";
@@ -130,23 +128,5 @@ export class OpdClinicalSectionController {
     @CurrentPrincipal() principal: Principal,
   ): Promise<OpdDiagnosisSectionView> {
     return this.service.patchDiagnoses(encounterId, dto, scope, principal);
-  }
-
-  @Post(":encounterId/draft-checkpoints")
-  @RequirePermissions("OPD_EDIT")
-  @ApiParam({ name: "encounterId", format: "uuid" })
-  @BaseOpenApiResponse(OpdDraftCheckpointView, { status: 201 })
-  createDraftCheckpoint(
-    @Param("encounterId", new ParseUUIDPipe()) encounterId: string,
-    @Body() dto: CreateOpdDraftCheckpointDto,
-    @Scope() scope: RequestScope,
-    @CurrentPrincipal() principal: Principal,
-  ): Promise<OpdDraftCheckpointView> {
-    return this.service.createDraftCheckpoint(
-      encounterId,
-      dto,
-      scope,
-      principal,
-    );
   }
 }

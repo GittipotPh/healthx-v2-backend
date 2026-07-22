@@ -38,6 +38,12 @@ async function main(): Promise<void> {
         const orderPrescriptionLinkCount =
           await tx.opd_order_prescription_link.count();
         const orderSaleLinkCount = await tx.opd_order_sale_link.count();
+        const draftSnapshotCount = await tx.opd_draft_snapshot.count();
+        const draftImportCount = await tx.opd_draft_import.count();
+        const draftImportSectionCount =
+          await tx.opd_draft_import_section.count();
+        const clinicalFinalizationCount =
+          await tx.opd_clinical_finalization.count();
         const candidateCounts = await tx.$queryRaw<BackfillCandidateCountRow[]>(
           Prisma.sql`
           WITH candidate AS (
@@ -733,6 +739,216 @@ async function main(): Promise<void> {
           ) AS mismatch
         `,
         );
+        const draftSnapshotIntegrityMismatches = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM opd_draft_snapshot AS snapshot
+          LEFT JOIN opd_encounter AS encounter
+            ON encounter.encounter_id = snapshot.source_encounter_id
+           AND encounter.clinic_id = snapshot.clinic_id
+           AND encounter.branch_id = snapshot.branch_id
+          LEFT JOIN opd_draft_checkpoint AS checkpoint
+            ON checkpoint.draft_checkpoint_id = snapshot.draft_checkpoint_id
+           AND checkpoint.encounter_id = snapshot.source_encounter_id
+           AND checkpoint.clinic_id = snapshot.clinic_id
+           AND checkpoint.branch_id = snapshot.branch_id
+          WHERE encounter.encounter_id IS NULL
+             OR checkpoint.draft_checkpoint_id IS NULL
+             OR encounter.customer_id IS DISTINCT FROM snapshot.customer_id
+             OR snapshot.schema_version IS DISTINCT FROM 'opd-draft-copy-v1'
+             OR JSONB_TYPEOF(snapshot.copyable_content) IS DISTINCT FROM 'object'
+             OR JSONB_TYPEOF(snapshot.available_sections) IS DISTINCT FROM 'array'
+             OR OCTET_LENGTH(snapshot.copyable_content::TEXT) > 1100000
+             OR snapshot.content_sha256 !~ '^[0-9a-f]{64}$'
+             OR snapshot.captured_by_user_id IS DISTINCT FROM checkpoint.actor_user_id
+             OR snapshot.captured_at IS DISTINCT FROM checkpoint.created_at
+             OR EXISTS (
+               SELECT 1
+               FROM JSONB_ARRAY_ELEMENTS_TEXT(snapshot.available_sections) AS code(value)
+               WHERE code.value NOT IN (
+                 'SYMPTOMS', 'INTAKE', 'DIAGNOSES',
+                 'NOTE_CHIEF_COMPLAINT', 'NOTE_PHYSICAL_EXAMINATION',
+                 'NOTE_DIAGNOSIS_NARRATIVE', 'NOTE_TREATMENT',
+                 'NOTE_TREATMENT_PLAN', 'NOTE_ADDITIONAL_NOTES', 'NOTE_FREE_NOTE'
+               )
+             )
+             OR JSONB_ARRAY_LENGTH(snapshot.available_sections) IS DISTINCT FROM (
+               SELECT COUNT(DISTINCT code.value)::INTEGER
+               FROM JSONB_ARRAY_ELEMENTS_TEXT(snapshot.available_sections) AS code(value)
+             )
+        `);
+        const draftImportIntegrityMismatches = await tx.$queryRaw<CountRow[]>(
+          Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM (
+            SELECT draft_import.draft_import_id::TEXT AS resource_id
+            FROM opd_draft_import AS draft_import
+            LEFT JOIN opd_encounter AS target
+              ON target.encounter_id = draft_import.target_encounter_id
+             AND target.clinic_id = draft_import.clinic_id
+             AND target.branch_id = draft_import.branch_id
+            LEFT JOIN opd_draft_snapshot AS snapshot
+              ON snapshot.draft_snapshot_id = draft_import.source_snapshot_id
+             AND snapshot.clinic_id = draft_import.clinic_id
+             AND snapshot.branch_id = draft_import.branch_id
+             AND snapshot.customer_id = draft_import.customer_id
+            LEFT JOIN LATERAL (
+              SELECT COUNT(*)::INTEGER AS section_count
+              FROM opd_draft_import_section AS section
+              WHERE section.draft_import_id = draft_import.draft_import_id
+            ) AS section_total ON TRUE
+            WHERE target.encounter_id IS NULL
+               OR snapshot.draft_snapshot_id IS NULL
+               OR target.customer_id IS DISTINCT FROM draft_import.customer_id
+               OR draft_import.source_encounter_id IS DISTINCT FROM snapshot.source_encounter_id
+               OR draft_import.source_checkpoint_id IS DISTINCT FROM snapshot.draft_checkpoint_id
+               OR draft_import.source_content_sha256 IS DISTINCT FROM snapshot.content_sha256
+               OR draft_import.source_encounter_id = draft_import.target_encounter_id
+               OR JSONB_TYPEOF(draft_import.selected_sections) IS DISTINCT FROM 'array'
+               OR JSONB_ARRAY_LENGTH(draft_import.selected_sections) < 1
+               OR JSONB_TYPEOF(draft_import.target_before_manifest) IS DISTINCT FROM 'object'
+               OR JSONB_TYPEOF(draft_import.target_after_manifest) IS DISTINCT FROM 'object'
+               OR draft_import.idempotency_key_hash !~ '^[0-9a-f]{64}$'
+               OR section_total.section_count IS DISTINCT FROM JSONB_ARRAY_LENGTH(draft_import.selected_sections)
+
+            UNION ALL
+
+            SELECT section.draft_import_section_id::TEXT AS resource_id
+            FROM opd_draft_import_section AS section
+            LEFT JOIN opd_draft_import AS draft_import
+              ON draft_import.draft_import_id = section.draft_import_id
+             AND draft_import.target_encounter_id = section.target_encounter_id
+             AND draft_import.clinic_id = section.clinic_id
+             AND draft_import.branch_id = section.branch_id
+            WHERE draft_import.draft_import_id IS NULL
+               OR section.source_section_sha256 !~ '^[0-9a-f]{64}$'
+               OR section.target_resource_version < 1
+               OR section.section_code NOT IN (
+                 'SYMPTOMS', 'INTAKE', 'DIAGNOSES',
+                 'NOTE_CHIEF_COMPLAINT', 'NOTE_PHYSICAL_EXAMINATION',
+                 'NOTE_DIAGNOSIS_NARRATIVE', 'NOTE_TREATMENT',
+                 'NOTE_TREATMENT_PLAN', 'NOTE_ADDITIONAL_NOTES', 'NOTE_FREE_NOTE'
+               )
+               OR section.target_resource_type NOT IN (
+                 'OPD_SYMPTOM_SECTION', 'OPD_INTAKE',
+                 'OPD_DIAGNOSIS_SECTION', 'OPD_NOTE_SECTION'
+               )
+               OR (
+                 section.review_status = 'REVIEW_REQUIRED'
+                 AND (
+                   section.reviewed_target_version IS NOT NULL
+                   OR section.reviewed_by_user_id IS NOT NULL
+                   OR section.reviewed_at IS NOT NULL
+                 )
+               )
+               OR (
+                 section.review_status = 'REVIEWED'
+                 AND (
+                   section.reviewed_target_version IS NULL
+                   OR section.reviewed_by_user_id IS NULL
+                   OR section.reviewed_at IS NULL
+                 )
+               )
+               OR section.review_status NOT IN ('REVIEW_REQUIRED', 'REVIEWED')
+          ) AS mismatch
+        `,
+        );
+        const clinicalFinalizationIntegrityMismatches = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM opd_clinical_finalization AS finalization
+          LEFT JOIN opd_encounter AS encounter
+            ON encounter.encounter_id = finalization.encounter_id
+           AND encounter.clinic_id = finalization.clinic_id
+           AND encounter.branch_id = finalization.branch_id
+          LEFT JOIN opd_queue_ticket AS ticket
+            ON ticket.queue_ticket_id = finalization.queue_ticket_id
+           AND ticket.clinic_id = finalization.clinic_id
+           AND ticket.branch_id = finalization.branch_id
+          WHERE encounter.encounter_id IS NULL
+             OR ticket.queue_ticket_id IS NULL
+             OR encounter.queue_ticket_id IS DISTINCT FROM finalization.queue_ticket_id
+             OR encounter.customer_id IS DISTINCT FROM ticket.customer_id
+             OR encounter.appointment_id IS DISTINCT FROM ticket.appointment_id
+             OR encounter.workflow_status NOT IN ('POST_VISIT', 'CLOSED')
+             OR encounter.clinical_record_status IS DISTINCT FROM 'FINALIZED'
+             OR encounter.version < finalization.result_encounter_version
+             OR encounter.finalized_by IS DISTINCT FROM finalization.finalized_by
+             OR encounter.finalized_at IS DISTINCT FROM finalization.finalized_at
+             OR finalization.source_encounter_version < 1
+             OR finalization.result_encounter_version
+                  IS DISTINCT FROM finalization.source_encounter_version + 1
+             OR finalization.source_queue_ticket_version < 1
+             OR finalization.result_queue_ticket_version
+                  IS DISTINCT FROM finalization.source_queue_ticket_version + 1
+             OR finalization.source_queue_step IS DISTINCT FROM 'IN_SERVICE'
+             OR finalization.result_queue_step IS DISTINCT FROM 'DISPENSING'
+             OR finalization.manifest_schema
+                  IS DISTINCT FROM 'opd-clinical-finalization-v1'
+             OR JSONB_TYPEOF(finalization.resource_manifest) IS DISTINCT FROM 'object'
+             OR finalization.resource_manifest ->> 'schema'
+                  IS DISTINCT FROM finalization.manifest_schema
+             OR finalization.resource_manifest ->> 'encounterId'
+                  IS DISTINCT FROM finalization.encounter_id::TEXT
+             OR (finalization.resource_manifest ->> 'encounterVersion')::INTEGER
+                  IS DISTINCT FROM finalization.source_encounter_version
+             OR finalization.resource_manifest #>> '{queue,id}'
+                  IS DISTINCT FROM finalization.queue_ticket_id::TEXT
+             OR (finalization.resource_manifest #>> '{queue,version}')::INTEGER
+                  IS DISTINCT FROM finalization.source_queue_ticket_version
+             OR finalization.resource_manifest #>> '{queue,currentStep}'
+                  IS DISTINCT FROM finalization.source_queue_step
+             OR finalization.manifest_hash !~ '^[0-9a-f]{64}$'
+             OR finalization.idempotency_key_hash !~ '^[0-9a-f]{64}$'
+             OR NOT EXISTS (
+               SELECT 1
+               FROM queue_transition AS transition
+               WHERE transition.queue_ticket_id = finalization.queue_ticket_id
+                 AND transition.clinic_id = finalization.clinic_id
+                 AND transition.branch_id = finalization.branch_id
+                 AND transition.encounter_id = finalization.encounter_id
+                 AND transition.from_step = finalization.source_queue_step
+                 AND transition.to_step = finalization.result_queue_step
+                 AND transition.expected_version = finalization.source_queue_ticket_version
+                 AND transition.result_version = finalization.result_queue_ticket_version
+             )
+             OR NOT EXISTS (
+               SELECT 1
+               FROM audit_log AS audit
+               WHERE audit.clinic_id = finalization.clinic_id
+                 AND audit.branch_id = finalization.branch_id
+                 AND audit.reference_type = 'OPD'
+                 AND audit.reference_id = finalization.encounter_id::TEXT
+                 AND audit.action = 'clinical.finalize'
+             )
+             OR NOT EXISTS (
+               SELECT 1
+               FROM audit_log AS audit
+               WHERE audit.clinic_id = finalization.clinic_id
+                 AND audit.branch_id = finalization.branch_id
+                 AND audit.reference_type = 'QUEUE'
+                 AND audit.reference_id = finalization.queue_ticket_id::TEXT
+                 AND audit.action = 'enter-dispensing-after-treatment'
+             )
+        `);
+        const missingFinalizationPermission = await tx.$queryRaw<CountRow[]>(
+          Prisma.sql`
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM permission
+            WHERE permission_id = 'OPD_FINALIZE'
+          ) THEN 0 ELSE 1 END::BIGINT AS count
+        `,
+        );
+        const unexpectedFinalizationDefaultGrants = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM default_permission
+          WHERE permission_id = 'OPD_FINALIZE'
+        `);
         const unsafeLegacyOpdNumbers = await tx.$queryRaw<
           CountRow[]
         >(Prisma.sql`
@@ -843,6 +1059,10 @@ async function main(): Promise<void> {
           orderReleaseItemRows: orderReleaseItemCount,
           orderPrescriptionLinkRows: orderPrescriptionLinkCount,
           orderSaleLinkRows: orderSaleLinkCount,
+          draftSnapshotRows: draftSnapshotCount,
+          draftImportRows: draftImportCount,
+          draftImportSectionRows: draftImportSectionCount,
+          clinicalFinalizationRows: clinicalFinalizationCount,
           validLegacyPairsMissingTicket: Number(
             candidateCounts[0]?.valid_missing ?? 0n,
           ),
@@ -882,6 +1102,21 @@ async function main(): Promise<void> {
           ),
           orderReleaseIntegrityMismatches: Number(
             orderReleaseIntegrityMismatches[0]?.count ?? 0n,
+          ),
+          draftSnapshotIntegrityMismatches: Number(
+            draftSnapshotIntegrityMismatches[0]?.count ?? 0n,
+          ),
+          draftImportIntegrityMismatches: Number(
+            draftImportIntegrityMismatches[0]?.count ?? 0n,
+          ),
+          clinicalFinalizationIntegrityMismatches: Number(
+            clinicalFinalizationIntegrityMismatches[0]?.count ?? 0n,
+          ),
+          missingFinalizationPermission: Number(
+            missingFinalizationPermission[0]?.count ?? 0n,
+          ),
+          unexpectedFinalizationDefaultGrants: Number(
+            unexpectedFinalizationDefaultGrants[0]?.count ?? 0n,
           ),
           unsafeLegacyOpdNumbers: Number(
             unsafeLegacyOpdNumbers[0]?.count ?? 0n,
@@ -924,6 +1159,11 @@ async function main(): Promise<void> {
       report.intakeIntegrityMismatches > 0 ||
       report.orderIntegrityMismatches > 0 ||
       report.orderReleaseIntegrityMismatches > 0 ||
+      report.draftSnapshotIntegrityMismatches > 0 ||
+      report.draftImportIntegrityMismatches > 0 ||
+      report.clinicalFinalizationIntegrityMismatches > 0 ||
+      report.missingFinalizationPermission > 0 ||
+      report.unexpectedFinalizationDefaultGrants > 0 ||
       report.unsafeLegacyOpdNumbers > 0 ||
       report.duplicateActiveDailyWalkIns > 0 ||
       report.missingActiveWalkInUniquenessIndex > 0 ||

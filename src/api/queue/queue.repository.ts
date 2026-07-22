@@ -1,12 +1,12 @@
 import { ConflictException, Injectable } from "@nestjs/common";
-import type {
-  appointment_anesthetic,
-  appointment_consultation,
-  opd_queue_ticket,
+import {
   Prisma,
-  queue_status,
-  queue_config,
-  statusAppointment,
+  type appointment_anesthetic,
+  type appointment_consultation,
+  type opd_queue_ticket,
+  type queue_config,
+  type queue_status,
+  type statusAppointment,
 } from "@prisma/client";
 import { PrismaService } from "../../prisma.service";
 import type {
@@ -33,11 +33,22 @@ export interface V2QueueIdentity {
   enteredAt: Date;
 }
 
+export interface V2QueueEncounterIdentity {
+  encounterId: string;
+  queueTicketId: string;
+  customerId: string;
+  appointmentId: string | null;
+}
+
 export type V2QueueTransitionOutcome =
   | "NOT_FOUND"
   | "UNCHANGED"
   | "UPDATED"
   | "CONFLICT";
+
+interface LockedIdRow {
+  id: string;
+}
 
 const APPOINTMENT_RECORD_SELECT = {
   appointment_id: true,
@@ -409,6 +420,7 @@ export class QueueRepository {
       branchId: string;
       appointmentId: string | null;
       queueTicketId?: string;
+      expectedVersion?: number;
       toStep: string;
       actorUserId: string;
       reason: string | null;
@@ -437,6 +449,12 @@ export class QueueRepository {
           })
         : null;
     if (!ticket) return "NOT_FOUND";
+    if (
+      input.expectedVersion !== undefined &&
+      ticket.version !== input.expectedVersion
+    ) {
+      return "CONFLICT";
+    }
     if (ticket.current_step === input.toStep) return "UNCHANGED";
 
     const now = new Date();
@@ -501,6 +519,54 @@ export class QueueRepository {
         },
       },
     });
+  }
+
+  async findV2QueueEncounterIdentity(
+    clinicId: string,
+    branchId: string,
+    queueTicketId: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<V2QueueEncounterIdentity | null> {
+    const encounter = await tx.opd_encounter.findUnique({
+      where: {
+        queue_ticket_id_clinic_id_branch_id: {
+          queue_ticket_id: queueTicketId,
+          clinic_id: clinicId,
+          branch_id: branchId,
+        },
+      },
+      select: {
+        encounter_id: true,
+        queue_ticket_id: true,
+        customer_id: true,
+        appointment_id: true,
+      },
+    });
+    return encounter
+      ? {
+          encounterId: encounter.encounter_id,
+          queueTicketId: encounter.queue_ticket_id,
+          customerId: encounter.customer_id,
+          appointmentId: encounter.appointment_id,
+        }
+      : null;
+  }
+
+  async lockV2QueueTicket(
+    clinicId: string,
+    branchId: string,
+    queueTicketId: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<boolean> {
+    const rows = await tx.$queryRaw<LockedIdRow[]>(Prisma.sql`
+      SELECT "queue_ticket_id"::TEXT AS "id"
+      FROM "opd_queue_ticket"
+      WHERE "queue_ticket_id" = ${queueTicketId}::UUID
+        AND "clinic_id" = ${clinicId}
+        AND "branch_id" = ${branchId}
+      FOR UPDATE
+    `);
+    return rows.length === 1;
   }
 
   /** Upserts the consult detail record for an appointment (one row per appointment). */

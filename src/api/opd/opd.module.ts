@@ -25,6 +25,12 @@ import { OpdOrderService } from "./opd-order.service";
 import { OpdOrderReleaseController } from "./opd-order-release.controller";
 import { OpdOrderReleaseRepository } from "./opd-order-release.repository";
 import { OpdOrderReleaseService } from "./opd-order-release.service";
+import { OpdDraftLibraryController } from "./opd-draft-library.controller";
+import { OpdDraftLibraryRepository } from "./opd-draft-library.repository";
+import { OpdDraftLibraryService } from "./opd-draft-library.service";
+import { OpdClinicalFinalizationController } from "./opd-clinical-finalization.controller";
+import { OpdClinicalFinalizationRepository } from "./opd-clinical-finalization.repository";
+import { OpdClinicalFinalizationService } from "./opd-clinical-finalization.service";
 
 @Module({
   imports: [AuditLogModule, QueueModule],
@@ -36,6 +42,8 @@ import { OpdOrderReleaseService } from "./opd-order-release.service";
     OpdClinicalNoteController,
     OpdOrderController,
     OpdOrderReleaseController,
+    OpdDraftLibraryController,
+    OpdClinicalFinalizationController,
   ],
   providers: [
     OpdService,
@@ -54,6 +62,10 @@ import { OpdOrderReleaseService } from "./opd-order-release.service";
     OpdOrderRepository,
     OpdOrderReleaseService,
     OpdOrderReleaseRepository,
+    OpdDraftLibraryService,
+    OpdDraftLibraryRepository,
+    OpdClinicalFinalizationService,
+    OpdClinicalFinalizationRepository,
     OpdV2EnabledGuard,
   ],
   exports: [OpdService],

@@ -4,11 +4,12 @@ import { AuditLogModule } from "../audit-log/audit-log.module";
 import { QueueController } from "./queue.controller";
 import { QueueService } from "./queue.service";
 import { QueueRepository } from "./queue.repository";
+import { QueueTreatmentCompletionService } from "./queue-treatment-completion.service";
 
 @Module({
   imports: [AuditLogModule, ErpEventsModule],
   controllers: [QueueController],
-  providers: [QueueService, QueueRepository],
-  exports: [QueueService, QueueRepository],
+  providers: [QueueService, QueueRepository, QueueTreatmentCompletionService],
+  exports: [QueueService, QueueRepository, QueueTreatmentCompletionService],
 })
 export class QueueModule {}
