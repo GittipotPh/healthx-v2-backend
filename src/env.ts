@@ -15,6 +15,7 @@ export interface BackendEnv {
   REFRESH_TTL_DAYS: number;
   REDIS_URL: string;
   WEB_BASE_URL: string;
+  API_PUBLIC_BASE_URL: string;
   STORAGE_PROVIDER: "minio" | "azure";
   STORAGE_BUCKET: string;
   STORAGE_PUBLIC_BASE_URL?: string;
@@ -35,6 +36,8 @@ export interface BackendEnv {
   ERP_SERVICE_KEY?: string;
   ERP_ALLOWED_BRANCH_IDS?: string;
   OPD_V2_ENABLED: boolean;
+  OPD_COURSE_RESERVATION_ENABLED: boolean;
+  OPD_COURSE_VERIFICATION_ENABLED: boolean;
 }
 
 const schema = Joi.object<BackendEnv>({
@@ -55,6 +58,7 @@ const schema = Joi.object<BackendEnv>({
     .uri({ scheme: ["redis", "rediss"] })
     .default("redis://localhost:6379"),
   WEB_BASE_URL: Joi.string().uri().default("http://localhost:3000"),
+  API_PUBLIC_BASE_URL: Joi.string().uri().default("http://localhost:8080"),
   STORAGE_PROVIDER: Joi.string().valid("minio", "azure").default("minio"),
   STORAGE_BUCKET: Joi.string().min(3).default("healthx-local"),
   STORAGE_PUBLIC_BASE_URL: Joi.string().uri().optional(),
@@ -105,10 +109,18 @@ const schema = Joi.object<BackendEnv>({
   ERP_OUTBOX_ENABLED: Joi.boolean().default(false),
   RABBITMQ_URL: Joi.when("ERP_OUTBOX_ENABLED", {
     is: true,
-    then: Joi.string().uri({ scheme: ["amqp", "amqps"] }).required(),
-    otherwise: Joi.string().uri({ scheme: ["amqp", "amqps"] }).optional(),
+    then: Joi.string()
+      .uri({ scheme: ["amqp", "amqps"] })
+      .required(),
+    otherwise: Joi.string()
+      .uri({ scheme: ["amqp", "amqps"] })
+      .optional(),
   }),
-  ERP_OUTBOX_POLL_MS: Joi.number().integer().min(500).max(60_000).default(5_000),
+  ERP_OUTBOX_POLL_MS: Joi.number()
+    .integer()
+    .min(500)
+    .max(60_000)
+    .default(5_000),
   ERP_COMMAND_API_ENABLED: Joi.boolean().default(false),
   ERP_SERVICE_KEY: Joi.when("ERP_COMMAND_API_ENABLED", {
     is: true,
@@ -125,6 +137,12 @@ const schema = Joi.object<BackendEnv>({
   // Deployment kill switch for the new OPD worklist/start/workspace slice.
   // Existing legacy OPD list/history and shared Queue routes remain available.
   OPD_V2_ENABLED: Joi.boolean().default(true),
+  // Phase 3C production kill switch. Local code and read models may exist while
+  // all reserve/void commands remain disabled until the dual-writer gate passes.
+  OPD_COURSE_RESERVATION_ENABLED: Joi.boolean().default(false),
+  // Phase 3D production kill switch. Verification, evidence creation, inventory
+  // deduction, and compensation stay independently disabled by default.
+  OPD_COURSE_VERIFICATION_ENABLED: Joi.boolean().default(false),
 }).unknown(true);
 
 let cached: BackendEnv | undefined;

@@ -31,6 +31,12 @@ import { OpdDraftLibraryService } from "./opd-draft-library.service";
 import { OpdClinicalFinalizationController } from "./opd-clinical-finalization.controller";
 import { OpdClinicalFinalizationRepository } from "./opd-clinical-finalization.repository";
 import { OpdClinicalFinalizationService } from "./opd-clinical-finalization.service";
+import { OpdCourseReservationController } from "./opd-course-reservation.controller";
+import { OpdCourseReservationRepository } from "./opd-course-reservation.repository";
+import { OpdCourseReservationService } from "./opd-course-reservation.service";
+import { OpdCourseVerificationController } from "./opd-course-verification.controller";
+import { OpdCourseVerificationRepository } from "./opd-course-verification.repository";
+import { OpdCourseVerificationService } from "./opd-course-verification.service";
 
 @Module({
   imports: [AuditLogModule, QueueModule],
@@ -44,6 +50,8 @@ import { OpdClinicalFinalizationService } from "./opd-clinical-finalization.serv
     OpdOrderReleaseController,
     OpdDraftLibraryController,
     OpdClinicalFinalizationController,
+    OpdCourseReservationController,
+    OpdCourseVerificationController,
   ],
   providers: [
     OpdService,
@@ -66,6 +74,10 @@ import { OpdClinicalFinalizationService } from "./opd-clinical-finalization.serv
     OpdDraftLibraryRepository,
     OpdClinicalFinalizationService,
     OpdClinicalFinalizationRepository,
+    OpdCourseReservationService,
+    OpdCourseReservationRepository,
+    OpdCourseVerificationService,
+    OpdCourseVerificationRepository,
     OpdV2EnabledGuard,
   ],
   exports: [OpdService],

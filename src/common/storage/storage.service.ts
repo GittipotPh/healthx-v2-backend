@@ -43,6 +43,11 @@ export interface ReadUrlInput {
   expiresInSeconds?: number;
 }
 
+export interface ReadObjectInput {
+  bucketName?: string;
+  objectKey: string;
+}
+
 interface AzureSharedKey {
   accountName: string;
   accountKey: string;
@@ -63,7 +68,7 @@ export class StorageService {
     this.provider = this.env.STORAGE_PROVIDER;
     this.bucketName =
       this.provider === "azure"
-        ? this.env.AZURE_BLOB_CONTAINER ?? this.env.STORAGE_BUCKET
+        ? (this.env.AZURE_BLOB_CONTAINER ?? this.env.STORAGE_BUCKET)
         : this.env.STORAGE_BUCKET;
 
     if (this.provider === "minio") {
@@ -78,10 +83,14 @@ export class StorageService {
       });
     } else {
       const connectionString = this.env.AZURE_STORAGE_CONNECTION_STRING ?? "";
-      this.blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
+      this.blobServiceClient =
+        BlobServiceClient.fromConnectionString(connectionString);
       const sharedKey = parseAzureSharedKey(connectionString);
       this.azureSharedKey = sharedKey
-        ? new StorageSharedKeyCredential(sharedKey.accountName, sharedKey.accountKey)
+        ? new StorageSharedKeyCredential(
+            sharedKey.accountName,
+            sharedKey.accountKey,
+          )
         : undefined;
     }
   }
@@ -159,7 +168,9 @@ export class StorageService {
     }
 
     const startsOn = new Date(Date.now() - 60_000);
-    const expiresOn = new Date(Date.now() + (input.expiresInSeconds ?? 15 * 60) * 1000);
+    const expiresOn = new Date(
+      Date.now() + (input.expiresInSeconds ?? 15 * 60) * 1000,
+    );
     const sas = generateBlobSASQueryParameters(
       {
         containerName: bucketName,
@@ -174,9 +185,33 @@ export class StorageService {
     return `${blob.url}?${sas}`;
   }
 
+  async readObject(input: ReadObjectInput): Promise<Buffer> {
+    const bucketName = input.bucketName ?? this.bucketName;
+
+    if (this.provider === "minio") {
+      const result = await this.requiredS3().send(
+        new GetObjectCommand({
+          Bucket: bucketName,
+          Key: input.objectKey,
+        }),
+      );
+      if (!result.Body) {
+        throw new Error("Stored object returned no body");
+      }
+      return Buffer.from(await result.Body.transformToByteArray());
+    }
+
+    return this.requiredBlobService()
+      .getContainerClient(bucketName)
+      .getBlobClient(input.objectKey)
+      .downloadToBuffer();
+  }
+
   private ensureContainer(): Promise<void> {
     this.ensurePromise ??=
-      this.provider === "minio" ? this.ensureS3Bucket() : this.ensureAzureContainer();
+      this.provider === "minio"
+        ? this.ensureS3Bucket()
+        : this.ensureAzureContainer();
     return this.ensurePromise;
   }
 

@@ -24,15 +24,16 @@ describe("env", () => {
     expect(env.JWT_EXPIRES_IN_SECONDS).toBe(600);
     expect(env.REFRESH_TTL_DAYS).toBe(7);
     expect(env.REDIS_URL).toBe("redis://localhost:6379");
+    expect(env.API_PUBLIC_BASE_URL).toBe("http://localhost:8080");
     expect(env.STORAGE_PROVIDER).toBe("minio");
     expect(env.STORAGE_BUCKET).toBe("healthx-local");
     expect(env.S3_ENDPOINT).toBe("http://localhost:9000");
   });
 
   it("requires Azure storage connection details when Azure is selected", () => {
-    expect(() => validateEnv({ ...BASE_ENV, STORAGE_PROVIDER: "azure" })).toThrow(
-      /AZURE_STORAGE_CONNECTION_STRING/,
-    );
+    expect(() =>
+      validateEnv({ ...BASE_ENV, STORAGE_PROVIDER: "azure" }),
+    ).toThrow(/AZURE_STORAGE_CONNECTION_STRING/);
 
     const env = validateEnv({
       ...BASE_ENV,
@@ -59,9 +60,9 @@ describe("env", () => {
   });
 
   it("requires RABBITMQ_URL when the outbox dispatcher is enabled", () => {
-    expect(() => validateEnv({ ...BASE_ENV, ERP_OUTBOX_ENABLED: "true" })).toThrow(
-      /RABBITMQ_URL/,
-    );
+    expect(() =>
+      validateEnv({ ...BASE_ENV, ERP_OUTBOX_ENABLED: "true" }),
+    ).toThrow(/RABBITMQ_URL/);
 
     const env = validateEnv({
       ...BASE_ENV,
@@ -73,9 +74,9 @@ describe("env", () => {
   });
 
   it("requires the service key and branch allowlist when the command API is enabled", () => {
-    expect(() => validateEnv({ ...BASE_ENV, ERP_COMMAND_API_ENABLED: "true" })).toThrow(
-      /ERP_SERVICE_KEY/,
-    );
+    expect(() =>
+      validateEnv({ ...BASE_ENV, ERP_COMMAND_API_ENABLED: "true" }),
+    ).toThrow(/ERP_SERVICE_KEY/);
     expect(() =>
       validateEnv({
         ...BASE_ENV,
@@ -95,5 +96,7 @@ describe("env", () => {
     expect(validateEnv(BASE_ENV).ERP_OUTBOX_ENABLED).toBe(false);
     expect(validateEnv(BASE_ENV).ERP_COMMAND_API_ENABLED).toBe(false);
     expect(validateEnv(BASE_ENV).OPD_V2_ENABLED).toBe(true);
+    expect(validateEnv(BASE_ENV).OPD_COURSE_RESERVATION_ENABLED).toBe(false);
+    expect(validateEnv(BASE_ENV).OPD_COURSE_VERIFICATION_ENABLED).toBe(false);
   });
 });

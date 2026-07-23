@@ -2340,6 +2340,7 @@ model opd_encounter {
   diagnosis_section      opd_diagnosis_section?
   note_workspace         opd_note_workspace?
   orders                 opd_order[]
+  course_reservations    opd_course_reservation[]
   draft_snapshots        opd_draft_snapshot[]       @relation("OpdDraftSnapshotSourceEncounter")
   draft_imports          opd_draft_import[]         @relation("OpdDraftImportTargetEncounter")
   clinical_finalization  opd_clinical_finalization?
@@ -3003,6 +3004,282 @@ model opd_order_sale_link {
   @@unique([release_id, clinic_id, branch_id, encounter_id, order_id], map: "opd_order_sale_link_release_uq")
   @@unique([branch_id, legacy_sale_order_id], map: "opd_order_sale_link_legacy_uq")
   @@index([clinic_id, branch_id, customer_id, created_at], map: "opd_order_sale_link_scope_idx")
+}
+
+// Phase 3C reservation root. All entitlement/service-usage/OPD/customer
+// identities are scalar snapshots; the only relation to a legacy-shaped value
+// is documentary. The app-owned encounter and child relations are tenant-safe.
+model opd_course_reservation {
+  reservation_id                       String                        @id @default(uuid()) @db.Uuid
+  clinic_id                            String                        @db.VarChar(50)
+  branch_id                            String                        @db.VarChar(50)
+  encounter_id                         String                        @db.Uuid
+  customer_id                          String                        @db.VarChar(50)
+  legacy_opd_id                        String                        @db.VarChar(50)
+  status                               String                        @default("RESERVED") @db.VarChar(20)
+  request_hash                         String                        @db.Char(64)
+  idempotency_key_hash                 String                        @db.Char(64)
+  source_encounter_version             Int
+  source_balance_manifest              Json
+  legacy_service_usage_id              String                        @db.VarChar(50)
+  legacy_service_usage_branch_id       String                        @db.VarChar(50)
+  legacy_service_usage_status_snapshot String                        @default("PENDING") @db.VarChar(20)
+  reserved_by_user_id                  String                        @db.VarChar(50)
+  reserved_at                          DateTime                      @db.Timestamptz(6)
+  voided_by_user_id                    String?                       @db.VarChar(50)
+  voided_at                            DateTime?                     @db.Timestamptz(6)
+  void_reason                          String?                       @db.VarChar(500)
+  used_by_user_id                      String?                       @db.VarChar(50)
+  used_at                              DateTime?                     @db.Timestamptz(6)
+  compensated_by_user_id               String?                       @db.VarChar(50)
+  compensated_at                       DateTime?                     @db.Timestamptz(6)
+  version                              Int                           @default(1)
+  created_at                           DateTime                      @default(now()) @db.Timestamptz(6)
+  updated_at                           DateTime                      @default(now()) @updatedAt @db.Timestamptz(6)
+  encounter                            opd_encounter                 @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_course_reservation_encounter_fkey")
+  items                                opd_course_reservation_item[]
+  verification                         opd_course_verification?
+
+  @@unique([reservation_id, clinic_id, branch_id, encounter_id], map: "opd_course_reservation_identity_uq")
+  @@unique([legacy_service_usage_branch_id, legacy_service_usage_id], map: "opd_course_reservation_legacy_usage_uq")
+  @@index([clinic_id, branch_id, customer_id, reserved_at(sort: Desc)], map: "opd_course_reservation_customer_idx")
+}
+
+model opd_course_reservation_item {
+  reservation_item_id          String                             @id @default(uuid()) @db.Uuid
+  reservation_id               String                             @db.Uuid
+  clinic_id                    String                             @db.VarChar(50)
+  branch_id                    String                             @db.VarChar(50)
+  encounter_id                 String                             @db.Uuid
+  display_order                Int
+  legacy_service_usage_item_id String                             @db.VarChar(50)
+  legacy_usage_log_id          String                             @unique(map: "opd_course_reservation_item_usage_log_uq") @db.VarChar(50)
+  purchase_branch_id           String                             @db.VarChar(50)
+  customer_id                  String                             @db.VarChar(50)
+  sale_order_id                String                             @db.VarChar(50)
+  course_id                    String                             @db.VarChar(50)
+  course_item_id               String                             @db.VarChar(50)
+  course_code_snapshot         String                             @db.VarChar(50)
+  course_name_snapshot         String                             @db.VarChar(250)
+  item_name_snapshot           String                             @db.VarChar(256)
+  unit_snapshot                String                             @db.VarChar(50)
+  entitlement_expire_at        DateTime                           @db.Timestamp(6)
+  display_expire_at            DateTime                           @db.Timestamp(6)
+  entitlement_amount           Decimal                            @db.Decimal(10, 2)
+  before_reserved_amount       Decimal                            @db.Decimal(10, 2)
+  before_used_amount           Decimal                            @db.Decimal(10, 2)
+  before_remaining_amount      Decimal                            @db.Decimal(10, 2)
+  reserved_amount              Decimal                            @db.Decimal(10, 2)
+  after_remaining_amount       Decimal                            @db.Decimal(10, 2)
+  entitlement_created_at       DateTime?                          @db.Timestamp(6)
+  entitlement_updated_at       DateTime?                          @db.Timestamp(6)
+  sale_order_updated_at        DateTime?                          @db.Timestamp(6)
+  course_updated_at            DateTime                           @db.Timestamp(6)
+  course_item_updated_at       DateTime                           @db.Timestamp(6)
+  source_snapshot_hash         String                             @db.Char(64)
+  created_at                   DateTime                           @default(now()) @db.Timestamptz(6)
+  reservation                  opd_course_reservation             @relation(fields: [reservation_id, clinic_id, branch_id, encounter_id], references: [reservation_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_course_reservation_item_root_fkey")
+  components                   opd_course_reservation_component[]
+  operators                    opd_course_reservation_operator[]
+
+  @@unique([reservation_item_id, reservation_id, clinic_id, branch_id, encounter_id], map: "opd_course_reservation_item_identity_uq")
+  @@unique([reservation_id, purchase_branch_id, sale_order_id, course_item_id, entitlement_expire_at], map: "opd_course_reservation_item_entitlement_uq")
+  @@unique([reservation_id, display_order], map: "opd_course_reservation_item_order_uq")
+  @@unique([branch_id, legacy_service_usage_item_id], map: "opd_course_reservation_item_legacy_item_uq")
+}
+
+model opd_course_reservation_component {
+  reservation_component_id String                      @id @default(uuid()) @db.Uuid
+  reservation_item_id      String                      @db.Uuid
+  reservation_id           String                      @db.Uuid
+  clinic_id                String                      @db.VarChar(50)
+  branch_id                String                      @db.VarChar(50)
+  encounter_id             String                      @db.Uuid
+  display_order            Int
+  product_id               String                      @db.VarChar(50)
+  product_code_snapshot    String                      @db.VarChar(50)
+  product_name_snapshot    String                      @db.VarChar(250)
+  unit_snapshot            String                      @db.VarChar(250)
+  configured_quantity      Decimal                     @db.Decimal(10, 2)
+  total_quantity           Decimal                     @db.Decimal(10, 2)
+  lot_id                   String                      @db.VarChar(50)
+  expiry_at                DateTime                    @db.Timestamp(6)
+  stock_observed_quantity  Decimal                     @db.Decimal(10, 2)
+  stock_observed_at        DateTime                    @db.Timestamptz(6)
+  source_updated_at        DateTime?                   @db.Timestamp(6)
+  created_at               DateTime                    @default(now()) @db.Timestamptz(6)
+  reservation_item         opd_course_reservation_item @relation(fields: [reservation_item_id, reservation_id, clinic_id, branch_id, encounter_id], references: [reservation_item_id, reservation_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_course_reservation_component_item_fkey")
+
+  @@unique([reservation_component_id, reservation_item_id, reservation_id, clinic_id, branch_id, encounter_id], map: "opd_course_reservation_component_identity_uq")
+  @@unique([reservation_item_id, product_id], map: "opd_course_reservation_component_product_uq")
+  @@unique([reservation_item_id, display_order], map: "opd_course_reservation_component_order_uq")
+  @@index([branch_id, product_id, lot_id, expiry_at], map: "opd_course_reservation_component_lot_idx")
+}
+
+model opd_course_reservation_operator {
+  reservation_operator_id String                      @id @default(uuid()) @db.Uuid
+  reservation_item_id     String                      @db.Uuid
+  reservation_id          String                      @db.Uuid
+  clinic_id               String                      @db.VarChar(50)
+  branch_id               String                      @db.VarChar(50)
+  encounter_id            String                      @db.Uuid
+  user_id                 String                      @db.VarChar(50)
+  role_id                 String                      @db.VarChar(50)
+  operator_type           String                      @db.VarChar(20)
+  commission_amount       Decimal                     @db.Decimal(10, 2)
+  commission_unit         String                      @db.VarChar(20)
+  source_user_updated_at  DateTime?                   @db.Timestamp(6)
+  created_at              DateTime                    @default(now()) @db.Timestamptz(6)
+  reservation_item        opd_course_reservation_item @relation(fields: [reservation_item_id, reservation_id, clinic_id, branch_id, encounter_id], references: [reservation_item_id, reservation_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_course_reservation_operator_item_fkey")
+
+  @@unique([reservation_operator_id, reservation_item_id, reservation_id, clinic_id, branch_id, encounter_id], map: "opd_course_reservation_operator_identity_uq")
+  @@unique([reservation_item_id, role_id, operator_type], map: "opd_course_reservation_operator_rule_uq")
+  @@index([branch_id, user_id, operator_type], map: "opd_course_reservation_operator_user_idx")
+}
+
+// Immutable Phase 3D verification/evidence root. Customer-file and all legacy
+// operational identities remain scalar references with no Prisma relation.
+model opd_course_verification {
+  verification_id                String                              @id @default(uuid()) @db.Uuid
+  clinic_id                      String                              @db.VarChar(50)
+  branch_id                      String                              @db.VarChar(50)
+  encounter_id                   String                              @db.Uuid
+  reservation_id                 String                              @unique(map: "opd_course_verification_reservation_uq") @db.Uuid
+  customer_id                    String                              @db.VarChar(50)
+  legacy_opd_id                  String                              @db.VarChar(50)
+  legacy_service_usage_id        String                              @db.VarChar(50)
+  legacy_service_usage_branch_id String                              @db.VarChar(50)
+  source_reservation_version     Int
+  result_reservation_version     Int
+  source_legacy_status           String                              @db.VarChar(20)
+  result_legacy_status           String                              @db.VarChar(20)
+  manifest_schema                String                              @db.VarChar(50)
+  verification_manifest          Json
+  manifest_hash                  String                              @db.Char(64)
+  signer_customer_id             String                              @db.VarChar(50)
+  acknowledgement_version        String                              @db.VarChar(50)
+  acknowledgement_locale         String                              @db.VarChar(10)
+  acknowledgement_hash           String                              @db.Char(64)
+  request_hash                   String                              @db.Char(64)
+  idempotency_key_hash           String                              @db.Char(64)
+  verified_by_user_id            String                              @db.VarChar(50)
+  verified_at                    DateTime                            @db.Timestamptz(6)
+  signature_file_id              String                              @unique(map: "opd_course_verification_signature_file_uq") @db.VarChar(50)
+  signature_mime_type            String                              @db.VarChar(100)
+  signature_bytes                Int
+  signature_hash                 String                              @db.Char(64)
+  pdf_file_id                    String                              @unique(map: "opd_course_verification_pdf_file_uq") @db.VarChar(50)
+  pdf_mime_type                  String                              @db.VarChar(100)
+  pdf_bytes                      Int
+  pdf_hash                       String                              @db.Char(64)
+  render_template                String                              @db.VarChar(50)
+  render_version                 Int
+  legacy_document_url            String
+  client_ip                      String?                             @db.VarChar(64)
+  user_agent_hash                String?                             @db.Char(64)
+  created_at                     DateTime                            @default(now()) @db.Timestamptz(6)
+  reservation                    opd_course_reservation              @relation(fields: [reservation_id, clinic_id, branch_id, encounter_id], references: [reservation_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_course_verification_reservation_fkey")
+  components                     opd_course_verification_component[]
+  compensation_requests          opd_course_compensation_request[]
+
+  @@unique([verification_id, reservation_id, clinic_id, branch_id, encounter_id], map: "opd_course_verification_identity_uq")
+  @@unique([reservation_id, clinic_id, branch_id, encounter_id], map: "opd_course_verification_reservation_identity_uq")
+  @@unique([legacy_service_usage_branch_id, legacy_service_usage_id], map: "opd_course_verification_legacy_usage_uq")
+  @@index([clinic_id, branch_id, customer_id, verified_at(sort: Desc)], map: "opd_course_verification_customer_time_idx")
+}
+
+model opd_course_verification_component {
+  verification_component_id   String                              @id @default(uuid()) @db.Uuid
+  verification_id             String                              @db.Uuid
+  reservation_component_id    String                              @db.Uuid
+  reservation_id              String                              @db.Uuid
+  clinic_id                   String                              @db.VarChar(50)
+  branch_id                   String                              @db.VarChar(50)
+  encounter_id                String                              @db.Uuid
+  product_id                  String                              @db.VarChar(50)
+  original_lot_id             String                              @db.VarChar(50)
+  actual_lot_id               String                              @db.VarChar(50)
+  replacement_reason          String?                             @db.VarChar(500)
+  expiry_at                   DateTime                            @db.Timestamp(6)
+  quantity                    Decimal                             @db.Decimal(10, 2)
+  before_lot_stock            Decimal                             @db.Decimal(10, 2)
+  after_lot_stock             Decimal                             @db.Decimal(10, 2)
+  before_total_stock          Decimal                             @db.Decimal(10, 2)
+  after_total_stock           Decimal                             @db.Decimal(10, 2)
+  inventory_log_id            String                              @db.VarChar(50)
+  inventory_source_updated_at DateTime?                           @db.Timestamp(6)
+  snapshot_hash               String                              @db.Char(64)
+  created_at                  DateTime                            @default(now()) @db.Timestamptz(6)
+  verification                opd_course_verification             @relation(fields: [verification_id, reservation_id, clinic_id, branch_id, encounter_id], references: [verification_id, reservation_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_course_verification_component_root_fkey")
+  compensation_components     opd_course_compensation_component[] @relation("verification_component_compensations")
+
+  @@unique([verification_component_id, verification_id, reservation_id, clinic_id, branch_id, encounter_id], map: "opd_course_verification_component_identity_uq")
+  @@unique([verification_id, reservation_component_id], map: "opd_course_verification_component_source_uq")
+  @@index([verification_id, inventory_log_id], map: "opd_course_verification_component_inventory_idx")
+  @@index([branch_id, product_id, actual_lot_id, expiry_at], map: "opd_course_verification_component_lot_idx")
+}
+
+model opd_course_compensation_request {
+  compensation_request_id        String                              @id @default(uuid()) @db.Uuid
+  verification_id                String                              @db.Uuid
+  reservation_id                 String                              @db.Uuid
+  clinic_id                      String                              @db.VarChar(50)
+  branch_id                      String                              @db.VarChar(50)
+  encounter_id                   String                              @db.Uuid
+  status                         String                              @default("PENDING") @db.VarChar(20)
+  reason_code                    String                              @db.VarChar(50)
+  reason_description             String                              @db.VarChar(256)
+  requested_by_user_id           String                              @db.VarChar(50)
+  requested_at                   DateTime                            @db.Timestamptz(6)
+  source_reservation_version     Int
+  request_hash                   String                              @db.Char(64)
+  idempotency_key_hash           String                              @db.Char(64)
+  legacy_service_usage_id        String                              @db.VarChar(50)
+  legacy_service_usage_branch_id String                              @db.VarChar(50)
+  reviewed_by_user_id            String?                             @db.VarChar(50)
+  reviewed_at                    DateTime?                           @db.Timestamptz(6)
+  review_reason                  String?                             @db.VarChar(500)
+  review_request_hash            String?                             @db.Char(64)
+  review_idempotency_key_hash    String?                             @db.Char(64)
+  adjustment_document_id         String?                             @db.VarChar(50)
+  reversal_manifest              Json?
+  reversal_manifest_hash         String?                             @db.Char(64)
+  version                        Int                                 @default(1)
+  created_at                     DateTime                            @default(now()) @db.Timestamptz(6)
+  updated_at                     DateTime                            @default(now()) @updatedAt @db.Timestamptz(6)
+  verification                   opd_course_verification             @relation(fields: [verification_id, reservation_id, clinic_id, branch_id, encounter_id], references: [verification_id, reservation_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_course_compensation_request_verification_fkey")
+  components                     opd_course_compensation_component[]
+
+  @@unique([compensation_request_id, verification_id, reservation_id, clinic_id, branch_id, encounter_id], map: "opd_course_compensation_request_identity_uq")
+  @@index([clinic_id, branch_id, status, requested_at(sort: Desc)], map: "opd_course_compensation_request_status_idx")
+}
+
+model opd_course_compensation_component {
+  compensation_component_id String                            @id @default(uuid()) @db.Uuid
+  compensation_request_id   String                            @db.Uuid
+  verification_component_id String                            @db.Uuid
+  verification_id           String                            @db.Uuid
+  reservation_id            String                            @db.Uuid
+  clinic_id                 String                            @db.VarChar(50)
+  branch_id                 String                            @db.VarChar(50)
+  encounter_id              String                            @db.Uuid
+  product_id                String                            @db.VarChar(50)
+  lot_id                    String                            @db.VarChar(50)
+  quantity                  Decimal                           @db.Decimal(10, 2)
+  original_inventory_log_id String                            @db.VarChar(50)
+  inverse_inventory_log_id  String                            @db.VarChar(50)
+  before_lot_stock          Decimal                           @db.Decimal(10, 2)
+  after_lot_stock           Decimal                           @db.Decimal(10, 2)
+  before_total_stock        Decimal                           @db.Decimal(10, 2)
+  after_total_stock         Decimal                           @db.Decimal(10, 2)
+  snapshot_hash             String                            @db.Char(64)
+  created_at                DateTime                          @default(now()) @db.Timestamptz(6)
+  compensation_request      opd_course_compensation_request   @relation(fields: [compensation_request_id, verification_id, reservation_id, clinic_id, branch_id, encounter_id], references: [compensation_request_id, verification_id, reservation_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_course_compensation_component_request_fkey")
+  verification_component    opd_course_verification_component @relation("verification_component_compensations", fields: [verification_component_id, verification_id, reservation_id, clinic_id, branch_id, encounter_id], references: [verification_component_id, verification_id, reservation_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_course_compensation_component_verification_fkey")
+
+  @@unique([compensation_component_id, compensation_request_id, verification_component_id, verification_id, reservation_id, clinic_id, branch_id, encounter_id], map: "opd_course_compensation_component_identity_uq")
+  @@unique([compensation_request_id, verification_component_id], map: "opd_course_compensation_component_source_uq")
+  @@index([compensation_request_id, inverse_inventory_log_id], map: "opd_course_compensation_component_inverse_idx")
 }
 
 // Immutable evidence for the Phase 6A clinical-finalization boundary. The

@@ -1,4 +1,6 @@
 import { Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { StorageService } from "../src/common/storage/storage.service";
 import { PrismaService } from "../src/prisma.service";
 
 interface CountRow {
@@ -17,6 +19,18 @@ interface SequenceLagRow {
   period_key: string;
   next_value: bigint | null;
   required_next_value: bigint;
+}
+
+interface EvidenceObjectRow {
+  verification_id: string;
+  signature_bucket_name: string;
+  signature_object_key: string;
+  signature_bytes: number;
+  signature_hash: string;
+  pdf_bucket_name: string;
+  pdf_object_key: string;
+  pdf_bytes: number;
+  pdf_hash: string;
 }
 
 async function main(): Promise<void> {
@@ -38,6 +52,21 @@ async function main(): Promise<void> {
         const orderPrescriptionLinkCount =
           await tx.opd_order_prescription_link.count();
         const orderSaleLinkCount = await tx.opd_order_sale_link.count();
+        const courseReservationCount = await tx.opd_course_reservation.count();
+        const courseReservationItemCount =
+          await tx.opd_course_reservation_item.count();
+        const courseReservationComponentCount =
+          await tx.opd_course_reservation_component.count();
+        const courseReservationOperatorCount =
+          await tx.opd_course_reservation_operator.count();
+        const courseVerificationCount =
+          await tx.opd_course_verification.count();
+        const courseVerificationComponentCount =
+          await tx.opd_course_verification_component.count();
+        const courseCompensationRequestCount =
+          await tx.opd_course_compensation_request.count();
+        const courseCompensationComponentCount =
+          await tx.opd_course_compensation_component.count();
         const draftSnapshotCount = await tx.opd_draft_snapshot.count();
         const draftImportCount = await tx.opd_draft_import.count();
         const draftImportSectionCount =
@@ -933,6 +962,851 @@ async function main(): Promise<void> {
                  AND audit.action = 'enter-dispensing-after-treatment'
              )
         `);
+        const courseReservationIntegrityMismatches = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM (
+            SELECT 'root:' || reservation.reservation_id::TEXT AS resource_id
+            FROM opd_course_reservation AS reservation
+            LEFT JOIN opd_encounter AS encounter
+              ON encounter.encounter_id = reservation.encounter_id
+             AND encounter.clinic_id = reservation.clinic_id
+             AND encounter.branch_id = reservation.branch_id
+            LEFT JOIN opd AS legacy_opd
+              ON legacy_opd.opd_id = reservation.legacy_opd_id
+             AND legacy_opd.clinic_id = reservation.clinic_id
+             AND legacy_opd.branch_id = reservation.branch_id
+             AND legacy_opd.customer_id = reservation.customer_id
+            LEFT JOIN service_usage AS legacy_usage
+              ON legacy_usage.service_usage_id = reservation.legacy_service_usage_id
+             AND legacy_usage.branch_id = reservation.legacy_service_usage_branch_id
+             AND legacy_usage.clinic_id = reservation.clinic_id
+            LEFT JOIN LATERAL (
+              SELECT COUNT(*)::INTEGER AS item_count
+              FROM opd_course_reservation_item AS item
+              WHERE item.reservation_id = reservation.reservation_id
+                AND item.encounter_id = reservation.encounter_id
+                AND item.clinic_id = reservation.clinic_id
+                AND item.branch_id = reservation.branch_id
+            ) AS item_total ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT COUNT(*)::INTEGER AS audit_count
+              FROM audit_log AS audit
+              WHERE audit.clinic_id = reservation.clinic_id
+                AND audit.branch_id = reservation.branch_id
+                AND audit.reference_type = 'OPD'
+                AND audit.reference_id = reservation.encounter_id::TEXT
+                AND audit.action = 'course.entitlement.reserve'
+                AND audit.metadata ->> 'reservationId' = reservation.reservation_id::TEXT
+            ) AS reserve_audit ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT COUNT(*)::INTEGER AS audit_count
+              FROM audit_log AS audit
+              WHERE audit.clinic_id = reservation.clinic_id
+                AND audit.branch_id = reservation.branch_id
+                AND audit.reference_type = 'OPD'
+                AND audit.reference_id = reservation.encounter_id::TEXT
+                AND audit.action = 'course.entitlement-reservation.void'
+                AND audit.metadata ->> 'reservationId' = reservation.reservation_id::TEXT
+            ) AS void_audit ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT COUNT(*)::INTEGER AS claim_count
+              FROM api_idempotency AS claim
+              WHERE claim.clinic_id = reservation.clinic_id
+                AND claim.branch_id = reservation.branch_id
+                AND claim.operation = 'opd.course-entitlement.reserve.v1'
+                AND claim.state = 'COMPLETED'
+                AND claim.resource_type = 'OPD_COURSE_RESERVATION'
+                AND claim.resource_id = reservation.reservation_id::TEXT
+                AND claim.request_hash = reservation.request_hash
+            ) AS reserve_claim ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT COUNT(*)::INTEGER AS claim_count
+              FROM api_idempotency AS claim
+              WHERE claim.clinic_id = reservation.clinic_id
+                AND claim.branch_id = reservation.branch_id
+                AND claim.operation = 'opd.course-entitlement-reservation.void.v1'
+                AND claim.state = 'COMPLETED'
+                AND claim.resource_type = 'OPD_COURSE_RESERVATION_VOID'
+                AND claim.resource_id = reservation.reservation_id::TEXT
+            ) AS void_claim ON TRUE
+            WHERE encounter.encounter_id IS NULL
+               OR encounter.customer_id IS DISTINCT FROM reservation.customer_id
+               OR legacy_opd.opd_id IS NULL
+               OR legacy_usage.service_usage_id IS NULL
+               OR reservation.legacy_service_usage_branch_id
+                    IS DISTINCT FROM reservation.branch_id
+               OR legacy_usage.customer_id IS DISTINCT FROM reservation.customer_id
+               OR legacy_usage.customer_owner_id IS DISTINCT FROM reservation.customer_id
+               OR legacy_usage.service_usage_status IS DISTINCT FROM CASE
+                    WHEN reservation.status IN ('RESERVED', 'VOIDED') THEN 'PENDING'::service_usage_status
+                    WHEN reservation.status IN ('USED', 'COMPENSATED') THEN 'APPROVED'::service_usage_status
+                  END
+               OR item_total.item_count < 1
+               OR item_total.item_count
+                    IS DISTINCT FROM JSONB_ARRAY_LENGTH(reservation.source_balance_manifest)
+               OR reserve_audit.audit_count IS DISTINCT FROM 1
+               OR reserve_claim.claim_count IS DISTINCT FROM 1
+               OR (
+                 reservation.status = 'RESERVED'
+                 AND (
+                   legacy_usage.status IS DISTINCT FROM 'ACTIVE'
+                   OR legacy_usage.verify_at IS NOT NULL
+                   OR legacy_usage.verify_by IS NOT NULL
+                   OR legacy_usage.document_url IS NOT NULL
+                   OR legacy_opd.management_item
+                        IS DISTINCT FROM reservation.legacy_service_usage_id
+                   OR void_audit.audit_count IS DISTINCT FROM 0
+                   OR void_claim.claim_count IS DISTINCT FROM 0
+                 )
+               )
+                OR (
+                  reservation.status = 'VOIDED'
+                 AND (
+                   legacy_usage.status IS DISTINCT FROM 'DELETED'
+                   OR legacy_opd.management_item = reservation.legacy_service_usage_id
+                   OR void_audit.audit_count IS DISTINCT FROM 1
+                   OR void_claim.claim_count IS DISTINCT FROM 1
+                  )
+                )
+                OR (
+                  reservation.status = 'USED'
+                  AND (
+                    legacy_usage.status IS DISTINCT FROM 'ACTIVE'
+                    OR legacy_usage.verify_at IS DISTINCT FROM reservation.used_at::TIMESTAMP
+                    OR legacy_usage.verify_by IS DISTINCT FROM reservation.used_by_user_id
+                    OR legacy_usage.document_url IS NULL
+                    OR legacy_opd.management_item
+                         IS DISTINCT FROM reservation.legacy_service_usage_id
+                    OR void_audit.audit_count IS DISTINCT FROM 0
+                    OR void_claim.claim_count IS DISTINCT FROM 0
+                  )
+                )
+                OR (
+                  reservation.status = 'COMPENSATED'
+                  AND (
+                    legacy_usage.status IS DISTINCT FROM 'DELETED'
+                    OR legacy_usage.verify_at IS DISTINCT FROM reservation.used_at::TIMESTAMP
+                    OR legacy_usage.verify_by IS DISTINCT FROM reservation.used_by_user_id
+                    OR legacy_usage.document_url IS NULL
+                    OR legacy_opd.management_item = reservation.legacy_service_usage_id
+                    OR void_audit.audit_count IS DISTINCT FROM 0
+                    OR void_claim.claim_count IS DISTINCT FROM 0
+                  )
+                )
+
+            UNION ALL
+
+            SELECT 'item:' || item.reservation_item_id::TEXT AS resource_id
+            FROM opd_course_reservation_item AS item
+            LEFT JOIN opd_course_reservation AS reservation
+              ON reservation.reservation_id = item.reservation_id
+             AND reservation.encounter_id = item.encounter_id
+             AND reservation.clinic_id = item.clinic_id
+             AND reservation.branch_id = item.branch_id
+            LEFT JOIN customer_coures AS entitlement
+              ON entitlement.clinic_id = item.clinic_id
+             AND entitlement.branch_id = item.purchase_branch_id
+             AND entitlement.customer_id = item.customer_id
+             AND entitlement.sale_order_id = item.sale_order_id
+             AND entitlement.item_id = item.course_item_id
+             AND entitlement.expire_date = item.entitlement_expire_at
+            LEFT JOIN sale_order AS purchase
+              ON purchase.sale_order_id = item.sale_order_id
+             AND purchase.branch_id = item.purchase_branch_id
+             AND purchase.clinic_id = item.clinic_id
+            LEFT JOIN service_usage_item AS legacy_item
+              ON legacy_item.service_usage_item_id = item.legacy_service_usage_item_id
+             AND legacy_item.service_usage_id = reservation.legacy_service_usage_id
+             AND legacy_item.branch_id = item.branch_id
+            LEFT JOIN customer_course_usage_log AS usage_log
+              ON usage_log.id = item.legacy_usage_log_id
+             AND usage_log.service_usage_id = reservation.legacy_service_usage_id
+             AND usage_log.branch_id = item.branch_id
+             AND usage_log.clinic_id = item.clinic_id
+            WHERE reservation.reservation_id IS NULL
+               OR item.customer_id IS DISTINCT FROM reservation.customer_id
+               OR item.purchase_branch_id IS DISTINCT FROM item.branch_id
+               OR entitlement.sale_order_id IS NULL
+               OR purchase.sale_order_id IS NULL
+               OR purchase.customer_id IS DISTINCT FROM item.customer_id
+               OR legacy_item.service_usage_item_id IS NULL
+               OR legacy_item.course_id IS DISTINCT FROM item.course_item_id
+               OR legacy_item.item_id IS NOT NULL
+               OR legacy_item.quantity IS DISTINCT FROM item.reserved_amount
+               OR legacy_item.expire_date IS DISTINCT FROM item.entitlement_expire_at
+               OR (
+                 SELECT COUNT(*)
+                 FROM service_usage_item AS candidate
+                 WHERE candidate.service_usage_id = reservation.legacy_service_usage_id
+                   AND candidate.branch_id = item.branch_id
+               ) IS DISTINCT FROM (
+                 SELECT COUNT(*)
+                 FROM opd_course_reservation_item AS candidate
+                 WHERE candidate.reservation_id = item.reservation_id
+               )
+               OR (
+                 reservation.status = 'RESERVED'
+                 AND (
+                   usage_log.id IS NULL
+                   OR usage_log.customer_id IS DISTINCT FROM item.customer_id
+                   OR usage_log.item_id IS DISTINCT FROM item.course_item_id
+                   OR usage_log.amount IS DISTINCT FROM item.reserved_amount
+                   OR usage_log.status IS DISTINCT FROM 'RESERVED'
+                   OR usage_log.expire_date IS DISTINCT FROM item.entitlement_expire_at
+                   OR usage_log.course_usage_type IS DISTINCT FROM 'SERVICE_USAGE'
+                 )
+               )
+                OR (
+                  reservation.status = 'VOIDED'
+                  AND usage_log.id IS NOT NULL
+                )
+                OR (
+                  reservation.status = 'USED'
+                  AND (
+                    usage_log.id IS NULL
+                    OR usage_log.customer_id IS DISTINCT FROM item.customer_id
+                    OR usage_log.item_id IS DISTINCT FROM item.course_item_id
+                    OR usage_log.amount IS DISTINCT FROM item.reserved_amount
+                    OR usage_log.status IS DISTINCT FROM 'USED'
+                    OR usage_log.expire_date IS DISTINCT FROM item.entitlement_expire_at
+                    OR usage_log.course_usage_type IS DISTINCT FROM 'SERVICE_USAGE'
+                  )
+                )
+                OR (
+                  reservation.status = 'COMPENSATED'
+                  AND usage_log.id IS NOT NULL
+                )
+
+            UNION ALL
+
+            SELECT 'component:' || component.reservation_component_id::TEXT AS resource_id
+            FROM opd_course_reservation_component AS component
+            LEFT JOIN opd_course_reservation_item AS item
+              ON item.reservation_item_id = component.reservation_item_id
+             AND item.reservation_id = component.reservation_id
+             AND item.encounter_id = component.encounter_id
+             AND item.clinic_id = component.clinic_id
+             AND item.branch_id = component.branch_id
+            LEFT JOIN service_usage_item_product AS legacy_component
+              ON legacy_component.service_usage_item_id = item.legacy_service_usage_item_id
+             AND legacy_component.branch_id = component.branch_id
+             AND legacy_component.item_id = component.product_id
+            WHERE item.reservation_item_id IS NULL
+               OR legacy_component.service_usage_item_id IS NULL
+               OR legacy_component.service_usage_id IS DISTINCT FROM (
+                 SELECT reservation.legacy_service_usage_id
+                 FROM opd_course_reservation AS reservation
+                 WHERE reservation.reservation_id = component.reservation_id
+               )
+               OR legacy_component.quantity IS DISTINCT FROM component.total_quantity
+               OR legacy_component.lot_id IS DISTINCT FROM COALESCE(
+                 (
+                   SELECT verified.actual_lot_id
+                   FROM opd_course_verification_component AS verified
+                   WHERE verified.reservation_component_id =
+                         component.reservation_component_id
+                 ),
+                 component.lot_id
+               )
+               OR (
+                 SELECT COUNT(*)
+                 FROM service_usage_item_product AS candidate
+                 WHERE candidate.service_usage_item_id = item.legacy_service_usage_item_id
+                   AND candidate.branch_id = component.branch_id
+               ) IS DISTINCT FROM (
+                 SELECT COUNT(*)
+                 FROM opd_course_reservation_component AS candidate
+                 WHERE candidate.reservation_item_id = component.reservation_item_id
+               )
+
+            UNION ALL
+
+            SELECT 'operator:' || operator.reservation_operator_id::TEXT AS resource_id
+            FROM opd_course_reservation_operator AS operator
+            LEFT JOIN opd_course_reservation_item AS item
+              ON item.reservation_item_id = operator.reservation_item_id
+             AND item.reservation_id = operator.reservation_id
+             AND item.encounter_id = operator.encounter_id
+             AND item.clinic_id = operator.clinic_id
+             AND item.branch_id = operator.branch_id
+            LEFT JOIN opd_course_reservation AS reservation
+              ON reservation.reservation_id = operator.reservation_id
+            WHERE item.reservation_item_id IS NULL
+               OR reservation.reservation_id IS NULL
+               OR NOT EXISTS (
+                 SELECT 1
+                 FROM course_operator_user AS legacy_operator
+                 WHERE legacy_operator.service_usage_id = reservation.legacy_service_usage_id
+                   AND legacy_operator.branch_id = operator.branch_id
+                   AND legacy_operator.user_id = operator.user_id
+                   AND legacy_operator.operator_type::TEXT = operator.operator_type
+               )
+               OR NOT EXISTS (
+                 SELECT 1
+                 FROM service_usage_item_commission AS legacy_commission
+                 WHERE legacy_commission.service_usage_item_id = item.legacy_service_usage_item_id
+                   AND legacy_commission.service_usage_id = reservation.legacy_service_usage_id
+                   AND legacy_commission.branch_id = operator.branch_id
+                   AND legacy_commission.role::TEXT = operator.role_id
+                   AND legacy_commission.operator_type::TEXT = operator.operator_type
+                   AND legacy_commission.commission = operator.commission_amount
+                   AND legacy_commission.unit::TEXT = operator.commission_unit
+               )
+
+            UNION ALL
+
+            SELECT 'inventory:' || reservation.reservation_id::TEXT AS resource_id
+            FROM opd_course_reservation AS reservation
+            INNER JOIN inventory_log AS movement
+              ON movement.document_id = reservation.legacy_service_usage_id
+             AND movement.branch_id = reservation.branch_id
+            WHERE reservation.status IN ('RESERVED', 'VOIDED')
+
+            UNION ALL
+
+            SELECT 'negative-balance:' || item.reservation_item_id::TEXT AS resource_id
+            FROM opd_course_reservation_item AS item
+            LEFT JOIN LATERAL (
+              SELECT COALESCE(SUM(log.amount), 0::DECIMAL) AS consumed
+              FROM customer_course_usage_log AS log
+              WHERE log.clinic_id = item.clinic_id
+                AND log.customer_id = item.customer_id
+                AND log.item_id = item.course_item_id
+                AND log.expire_date = item.entitlement_expire_at
+                AND log.status IN ('RESERVED', 'USED')
+            ) AS balance ON TRUE
+            WHERE item.entitlement_amount - balance.consumed < 0
+
+            UNION ALL
+
+            SELECT 'duplicate-active:' || encounter_id::TEXT AS resource_id
+            FROM opd_course_reservation
+            WHERE status = 'RESERVED'
+            GROUP BY clinic_id, branch_id, encounter_id
+            HAVING COUNT(*) > 1
+          ) AS mismatch
+        `);
+        const missingCourseVerificationPermissions = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+          WITH required(permission_id) AS (
+            VALUES ('OPD_COURSE_VERIFY'), ('OPD_COURSE_COMPENSATE')
+          )
+          SELECT COUNT(*)::BIGINT AS count
+          FROM required
+          LEFT JOIN permission
+            ON permission.permission_id = required.permission_id
+          WHERE permission.permission_id IS NULL
+        `);
+        const unexpectedCourseVerificationDefaultGrants = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+            SELECT COUNT(*)::BIGINT AS count
+            FROM default_permission
+            WHERE permission_id IN (
+              'OPD_COURSE_VERIFY',
+              'OPD_COURSE_COMPENSATE'
+            )
+          `);
+        const courseVerificationIntegrityMismatches = await tx.$queryRaw<
+          CountRow[]
+        >(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM (
+            SELECT
+              'verification:' || verification.verification_id::TEXT AS resource_id
+            FROM opd_course_verification AS verification
+            LEFT JOIN opd_course_reservation AS reservation
+              ON reservation.reservation_id = verification.reservation_id
+             AND reservation.clinic_id = verification.clinic_id
+             AND reservation.branch_id = verification.branch_id
+             AND reservation.encounter_id = verification.encounter_id
+            LEFT JOIN service_usage AS legacy_usage
+              ON legacy_usage.service_usage_id =
+                 verification.legacy_service_usage_id
+             AND legacy_usage.branch_id =
+                 verification.legacy_service_usage_branch_id
+             AND legacy_usage.clinic_id = verification.clinic_id
+            LEFT JOIN opd AS legacy_opd
+              ON legacy_opd.opd_id = verification.legacy_opd_id
+             AND legacy_opd.clinic_id = verification.clinic_id
+             AND legacy_opd.branch_id = verification.branch_id
+            LEFT JOIN customer_file AS signature_file
+              ON signature_file.file_id = verification.signature_file_id
+             AND signature_file.clinic_id = verification.clinic_id
+             AND signature_file.branch_id = verification.branch_id
+             AND signature_file.customer_id = verification.customer_id
+            LEFT JOIN customer_file AS pdf_file
+              ON pdf_file.file_id = verification.pdf_file_id
+             AND pdf_file.clinic_id = verification.clinic_id
+             AND pdf_file.branch_id = verification.branch_id
+             AND pdf_file.customer_id = verification.customer_id
+            WHERE reservation.reservation_id IS NULL
+               OR reservation.customer_id IS DISTINCT FROM verification.customer_id
+               OR reservation.legacy_opd_id IS DISTINCT FROM verification.legacy_opd_id
+               OR reservation.legacy_service_usage_id
+                    IS DISTINCT FROM verification.legacy_service_usage_id
+               OR reservation.status NOT IN ('USED', 'COMPENSATED')
+               OR reservation.used_by_user_id
+                    IS DISTINCT FROM verification.verified_by_user_id
+               OR reservation.used_at IS DISTINCT FROM verification.verified_at
+               OR verification.signer_customer_id
+                    IS DISTINCT FROM verification.customer_id
+               OR verification.manifest_schema
+                    IS DISTINCT FROM 'opd-course-verification-v1'
+               OR verification.verification_manifest ->> 'schema'
+                    IS DISTINCT FROM verification.manifest_schema
+               OR verification.verification_manifest ->> 'clinicId'
+                    IS DISTINCT FROM verification.clinic_id
+               OR verification.verification_manifest ->> 'branchId'
+                    IS DISTINCT FROM verification.branch_id
+               OR verification.verification_manifest ->> 'encounterId'
+                    IS DISTINCT FROM verification.encounter_id::TEXT
+               OR verification.verification_manifest ->> 'reservationId'
+                    IS DISTINCT FROM verification.reservation_id::TEXT
+               OR verification.verification_manifest ->> 'customerId'
+                    IS DISTINCT FROM verification.customer_id
+               OR verification.verification_manifest ->> 'signatureHash'
+                    IS DISTINCT FROM verification.signature_hash
+               OR verification.verification_manifest ->> 'acknowledgementHash'
+                    IS DISTINCT FROM verification.acknowledgement_hash
+               OR verification.verification_manifest ->> 'renderTemplate'
+                    IS DISTINCT FROM verification.render_template
+               OR (verification.verification_manifest ->> 'renderVersion')::INTEGER
+                    IS DISTINCT FROM verification.render_version
+               OR legacy_usage.service_usage_id IS NULL
+               OR legacy_usage.customer_id IS DISTINCT FROM verification.customer_id
+               OR legacy_usage.customer_owner_id
+                    IS DISTINCT FROM verification.customer_id
+               OR legacy_usage.service_usage_status IS DISTINCT FROM 'APPROVED'
+               OR legacy_usage.verify_by
+                    IS DISTINCT FROM verification.verified_by_user_id
+               OR legacy_usage.verify_at
+                    IS DISTINCT FROM verification.verified_at::TIMESTAMP
+               OR legacy_usage.document_url
+                    IS DISTINCT FROM verification.legacy_document_url
+               OR legacy_usage.status IS DISTINCT FROM CASE
+                    WHEN reservation.status = 'USED' THEN 'ACTIVE'::record_status
+                    WHEN reservation.status = 'COMPENSATED' THEN 'DELETED'::record_status
+                  END
+               OR legacy_opd.opd_id IS NULL
+               OR (
+                 reservation.status = 'USED'
+                 AND legacy_opd.management_item
+                     IS DISTINCT FROM verification.legacy_service_usage_id
+               )
+               OR (
+                 reservation.status = 'COMPENSATED'
+                 AND legacy_opd.management_item =
+                     verification.legacy_service_usage_id
+               )
+               OR signature_file.file_id IS NULL
+               OR signature_file.mime_type IS DISTINCT FROM 'image/png'
+               OR signature_file.file_size
+                    IS DISTINCT FROM verification.signature_bytes
+               OR signature_file.status IS DISTINCT FROM 'ACTIVE'
+               OR signature_file.public_url IS NOT NULL
+               OR pdf_file.file_id IS NULL
+               OR pdf_file.mime_type IS DISTINCT FROM 'application/pdf'
+               OR pdf_file.file_size IS DISTINCT FROM verification.pdf_bytes
+               OR pdf_file.status IS DISTINCT FROM 'ACTIVE'
+               OR pdf_file.public_url IS NOT NULL
+               OR (
+                 SELECT COUNT(*)
+                 FROM opd_course_verification_component AS component
+                 WHERE component.verification_id = verification.verification_id
+               ) IS DISTINCT FROM (
+                 SELECT COUNT(*)
+                 FROM opd_course_reservation_component AS component
+                 WHERE component.reservation_id = verification.reservation_id
+               )
+               OR EXISTS (
+                 SELECT 1
+                 FROM opd_course_reservation_component AS component
+                 WHERE component.reservation_id = verification.reservation_id
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM opd_course_verification_component AS verified
+                     WHERE verified.verification_id =
+                           verification.verification_id
+                       AND verified.reservation_component_id =
+                           component.reservation_component_id
+                   )
+               )
+               OR (
+                 reservation.status = 'USED'
+                 AND EXISTS (
+                   SELECT 1
+                   FROM opd_course_reservation_item AS item
+                   LEFT JOIN customer_course_usage_log AS usage_log
+                     ON usage_log.id = item.legacy_usage_log_id
+                    AND usage_log.service_usage_id =
+                        verification.legacy_service_usage_id
+                    AND usage_log.branch_id = verification.branch_id
+                    AND usage_log.clinic_id = verification.clinic_id
+                   WHERE item.reservation_id = verification.reservation_id
+                     AND (
+                       usage_log.id IS NULL
+                       OR usage_log.status IS DISTINCT FROM 'USED'
+                       OR usage_log.amount IS DISTINCT FROM item.reserved_amount
+                     )
+                 )
+               )
+               OR (
+                 reservation.status = 'COMPENSATED'
+                 AND EXISTS (
+                   SELECT 1
+                   FROM opd_course_reservation_item AS item
+                   INNER JOIN customer_course_usage_log AS usage_log
+                     ON usage_log.id = item.legacy_usage_log_id
+                    AND usage_log.service_usage_id =
+                        verification.legacy_service_usage_id
+                    AND usage_log.branch_id = verification.branch_id
+                   WHERE item.reservation_id = verification.reservation_id
+                 )
+               )
+               OR (
+                 SELECT COUNT(*)
+                 FROM api_idempotency AS claim
+                 WHERE claim.clinic_id = verification.clinic_id
+                   AND claim.branch_id = verification.branch_id
+                   AND claim.operation =
+                       'opd.course-verification.verify.v1'
+                   AND claim.state = 'COMPLETED'
+                   AND claim.resource_type = 'OPD_COURSE_VERIFICATION'
+                   AND claim.resource_id = verification.verification_id::TEXT
+                   AND claim.request_hash = verification.request_hash
+               ) IS DISTINCT FROM 1
+               OR (
+                 SELECT COUNT(*)
+                 FROM audit_log AS audit
+                 WHERE audit.clinic_id = verification.clinic_id
+                   AND audit.branch_id = verification.branch_id
+                   AND audit.reference_type = 'OPD'
+                   AND audit.reference_id = verification.encounter_id::TEXT
+                   AND audit.action = 'course.verify'
+                   AND audit.metadata ->> 'verificationId' =
+                       verification.verification_id::TEXT
+               ) IS DISTINCT FROM 1
+
+            UNION ALL
+
+            SELECT
+              'component:' ||
+              component.verification_component_id::TEXT AS resource_id
+            FROM opd_course_verification_component AS component
+            LEFT JOIN opd_course_verification AS verification
+              ON verification.verification_id = component.verification_id
+             AND verification.reservation_id = component.reservation_id
+             AND verification.clinic_id = component.clinic_id
+             AND verification.branch_id = component.branch_id
+             AND verification.encounter_id = component.encounter_id
+            LEFT JOIN opd_course_reservation_component AS reserved_component
+              ON reserved_component.reservation_component_id =
+                 component.reservation_component_id
+             AND reserved_component.reservation_id = component.reservation_id
+             AND reserved_component.clinic_id = component.clinic_id
+             AND reserved_component.branch_id = component.branch_id
+             AND reserved_component.encounter_id = component.encounter_id
+            LEFT JOIN opd_course_reservation_item AS reserved_item
+              ON reserved_item.reservation_item_id =
+                 reserved_component.reservation_item_id
+             AND reserved_item.reservation_id = component.reservation_id
+             AND reserved_item.clinic_id = component.clinic_id
+             AND reserved_item.branch_id = component.branch_id
+             AND reserved_item.encounter_id = component.encounter_id
+            LEFT JOIN inventory_log AS movement
+              ON movement.inventory_log_id = component.inventory_log_id
+             AND movement.branch_id = component.branch_id
+            LEFT JOIN service_usage_item_product AS legacy_component
+              ON legacy_component.service_usage_item_id =
+                 reserved_item.legacy_service_usage_item_id
+             AND legacy_component.item_id = component.product_id
+             AND legacy_component.branch_id = component.branch_id
+            WHERE verification.verification_id IS NULL
+               OR reserved_component.reservation_component_id IS NULL
+               OR reserved_component.product_id
+                    IS DISTINCT FROM component.product_id
+               OR reserved_component.lot_id
+                    IS DISTINCT FROM component.original_lot_id
+               OR reserved_component.total_quantity
+                    IS DISTINCT FROM component.quantity
+               OR legacy_component.lot_id
+                    IS DISTINCT FROM component.actual_lot_id
+               OR movement.inventory_log_id IS NULL
+               OR movement.document_id
+                    IS DISTINCT FROM verification.legacy_service_usage_id
+               OR movement.item_id IS DISTINCT FROM component.product_id
+               OR movement.lot_id IS DISTINCT FROM component.actual_lot_id
+               OR movement.stock_in IS DISTINCT FROM 0::DECIMAL
+               OR movement.stock_out IS DISTINCT FROM (
+                 SELECT SUM(peer.quantity)
+                 FROM opd_course_verification_component AS peer
+                 WHERE peer.verification_id = component.verification_id
+                   AND peer.inventory_log_id = component.inventory_log_id
+               )
+               OR movement.current_stock IS DISTINCT FROM (
+                 SELECT MIN(peer.after_total_stock)
+                 FROM opd_course_verification_component AS peer
+                 WHERE peer.verification_id = component.verification_id
+                   AND peer.inventory_log_id = component.inventory_log_id
+               )
+
+            UNION ALL
+
+            SELECT
+              'compensation:' ||
+              request.compensation_request_id::TEXT AS resource_id
+            FROM opd_course_compensation_request AS request
+            LEFT JOIN opd_course_verification AS verification
+              ON verification.verification_id = request.verification_id
+             AND verification.reservation_id = request.reservation_id
+             AND verification.clinic_id = request.clinic_id
+             AND verification.branch_id = request.branch_id
+             AND verification.encounter_id = request.encounter_id
+            LEFT JOIN opd_course_reservation AS reservation
+              ON reservation.reservation_id = request.reservation_id
+             AND reservation.clinic_id = request.clinic_id
+             AND reservation.branch_id = request.branch_id
+             AND reservation.encounter_id = request.encounter_id
+            LEFT JOIN service_usage_request_cancel AS legacy_request
+              ON legacy_request.service_usage_id =
+                 request.legacy_service_usage_id
+             AND legacy_request.branch_id =
+                 request.legacy_service_usage_branch_id
+            WHERE verification.verification_id IS NULL
+               OR reservation.reservation_id IS NULL
+               OR request.legacy_service_usage_id
+                    IS DISTINCT FROM verification.legacy_service_usage_id
+               OR legacy_request.service_usage_id IS NULL
+               OR legacy_request.reason_id IS DISTINCT FROM request.reason_code
+               OR legacy_request.description
+                    IS DISTINCT FROM request.reason_description
+               OR legacy_request.created_by
+                    IS DISTINCT FROM request.requested_by_user_id
+               OR legacy_request.status::TEXT IS DISTINCT FROM request.status
+               OR (
+                 request.status IN ('PENDING', 'REJECTED')
+                 AND reservation.status IS DISTINCT FROM 'USED'
+               )
+               OR (
+                 request.status = 'APPROVED'
+                 AND reservation.status IS DISTINCT FROM 'COMPENSATED'
+               )
+               OR (
+                 request.status IN ('REJECTED', 'APPROVED')
+                 AND (
+                   legacy_request.approve_by
+                       IS DISTINCT FROM request.reviewed_by_user_id
+                   OR legacy_request.approve_at
+                       IS DISTINCT FROM request.reviewed_at::TIMESTAMP
+                 )
+               )
+               OR (
+                 SELECT COUNT(*)
+                 FROM api_idempotency AS claim
+                 WHERE claim.clinic_id = request.clinic_id
+                   AND claim.branch_id = request.branch_id
+                   AND claim.operation =
+                       'opd.course-verification.compensation-request.v1'
+                   AND claim.state = 'COMPLETED'
+                   AND claim.resource_type =
+                       'OPD_COURSE_COMPENSATION_REQUEST'
+                   AND claim.resource_id =
+                       request.compensation_request_id::TEXT
+                   AND claim.request_hash = request.request_hash
+               ) IS DISTINCT FROM 1
+               OR (
+                 SELECT COUNT(*)
+                 FROM audit_log AS audit
+                 WHERE audit.clinic_id = request.clinic_id
+                   AND audit.branch_id = request.branch_id
+                   AND audit.reference_type = 'OPD'
+                   AND audit.reference_id = request.encounter_id::TEXT
+                   AND audit.action = 'course.compensation.request'
+                   AND audit.metadata ->> 'compensationRequestId' =
+                       request.compensation_request_id::TEXT
+               ) IS DISTINCT FROM 1
+               OR (
+                 request.status = 'REJECTED'
+                 AND (
+                   (
+                     SELECT COUNT(*)
+                     FROM api_idempotency AS claim
+                     WHERE claim.clinic_id = request.clinic_id
+                       AND claim.branch_id = request.branch_id
+                       AND claim.operation =
+                           'opd.course-verification.compensation-reject.v1'
+                       AND claim.state = 'COMPLETED'
+                       AND claim.resource_type =
+                           'OPD_COURSE_COMPENSATION_REJECT'
+                       AND claim.resource_id =
+                           request.compensation_request_id::TEXT
+                       AND claim.request_hash = request.review_request_hash
+                   ) IS DISTINCT FROM 1
+                   OR (
+                     SELECT COUNT(*)
+                     FROM audit_log AS audit
+                     WHERE audit.clinic_id = request.clinic_id
+                       AND audit.branch_id = request.branch_id
+                       AND audit.action = 'course.compensation.reject'
+                       AND audit.metadata ->> 'compensationRequestId' =
+                           request.compensation_request_id::TEXT
+                   ) IS DISTINCT FROM 1
+                 )
+               )
+               OR (
+                 request.status = 'APPROVED'
+                 AND (
+                   (
+                     SELECT COUNT(*)
+                     FROM api_idempotency AS claim
+                     WHERE claim.clinic_id = request.clinic_id
+                       AND claim.branch_id = request.branch_id
+                       AND claim.operation =
+                           'opd.course-verification.compensation-approve.v1'
+                       AND claim.state = 'COMPLETED'
+                       AND claim.resource_type =
+                           'OPD_COURSE_COMPENSATION_APPROVE'
+                       AND claim.resource_id =
+                           request.compensation_request_id::TEXT
+                       AND claim.request_hash = request.review_request_hash
+                   ) IS DISTINCT FROM 1
+                   OR (
+                     SELECT COUNT(*)
+                     FROM audit_log AS audit
+                     WHERE audit.clinic_id = request.clinic_id
+                       AND audit.branch_id = request.branch_id
+                       AND audit.action = 'course.compensation.approve'
+                       AND audit.metadata ->> 'compensationRequestId' =
+                           request.compensation_request_id::TEXT
+                   ) IS DISTINCT FROM 1
+                 )
+               )
+
+            UNION ALL
+
+            SELECT
+              'compensation-component:' ||
+              component.compensation_component_id::TEXT AS resource_id
+            FROM opd_course_compensation_component AS component
+            LEFT JOIN opd_course_compensation_request AS request
+              ON request.compensation_request_id =
+                 component.compensation_request_id
+             AND request.verification_id = component.verification_id
+             AND request.reservation_id = component.reservation_id
+             AND request.clinic_id = component.clinic_id
+             AND request.branch_id = component.branch_id
+             AND request.encounter_id = component.encounter_id
+            LEFT JOIN opd_course_verification_component AS verified
+              ON verified.verification_component_id =
+                 component.verification_component_id
+             AND verified.verification_id = component.verification_id
+             AND verified.reservation_id = component.reservation_id
+             AND verified.clinic_id = component.clinic_id
+             AND verified.branch_id = component.branch_id
+             AND verified.encounter_id = component.encounter_id
+            LEFT JOIN inventory_log AS original_movement
+              ON original_movement.inventory_log_id =
+                 component.original_inventory_log_id
+             AND original_movement.branch_id = component.branch_id
+            LEFT JOIN inventory_log AS inverse_movement
+              ON inverse_movement.inventory_log_id =
+                 component.inverse_inventory_log_id
+             AND inverse_movement.branch_id = component.branch_id
+            WHERE request.compensation_request_id IS NULL
+               OR request.status IS DISTINCT FROM 'APPROVED'
+               OR verified.verification_component_id IS NULL
+               OR component.product_id IS DISTINCT FROM verified.product_id
+               OR component.lot_id IS DISTINCT FROM verified.actual_lot_id
+               OR component.quantity IS DISTINCT FROM verified.quantity
+               OR component.original_inventory_log_id
+                    IS DISTINCT FROM verified.inventory_log_id
+               OR original_movement.inventory_log_id IS NULL
+               OR original_movement.stock_in IS DISTINCT FROM 0::DECIMAL
+               OR inverse_movement.inventory_log_id IS NULL
+               OR inverse_movement.document_id
+                    IS DISTINCT FROM request.adjustment_document_id
+               OR inverse_movement.item_id IS DISTINCT FROM component.product_id
+               OR inverse_movement.lot_id IS DISTINCT FROM component.lot_id
+               OR inverse_movement.stock_out IS DISTINCT FROM 0::DECIMAL
+               OR inverse_movement.stock_in IS DISTINCT FROM (
+                 SELECT SUM(peer.quantity)
+                 FROM opd_course_compensation_component AS peer
+                 WHERE peer.compensation_request_id =
+                       component.compensation_request_id
+                   AND peer.inverse_inventory_log_id =
+                       component.inverse_inventory_log_id
+               )
+               OR inverse_movement.current_stock IS DISTINCT FROM (
+                 SELECT MAX(peer.after_total_stock)
+                 FROM opd_course_compensation_component AS peer
+                 WHERE peer.compensation_request_id =
+                       component.compensation_request_id
+                   AND peer.inverse_inventory_log_id =
+                       component.inverse_inventory_log_id
+               )
+
+            UNION ALL
+
+            SELECT
+              'missing-compensation-component:' ||
+              verified.verification_component_id::TEXT AS resource_id
+            FROM opd_course_compensation_request AS request
+            INNER JOIN opd_course_verification_component AS verified
+              ON verified.verification_id = request.verification_id
+            LEFT JOIN opd_course_compensation_component AS compensated
+              ON compensated.compensation_request_id =
+                 request.compensation_request_id
+             AND compensated.verification_component_id =
+                 verified.verification_component_id
+            WHERE request.status = 'APPROVED'
+              AND compensated.compensation_component_id IS NULL
+          ) AS mismatch
+        `);
+        const legacyCourseEntitlementAnomalies = await tx.$queryRaw<CountRow[]>(
+          Prisma.sql`
+          WITH entitlement AS (
+            SELECT
+              clinic_id,
+              customer_id,
+              item_id,
+              expire_date,
+              COUNT(*)::BIGINT AS entitlement_count,
+              SUM(COALESCE(amount, 0::DECIMAL)) AS purchased,
+              BOOL_OR(amount IS NULL OR amount <= 0) AS non_positive
+            FROM customer_coures
+            GROUP BY clinic_id, customer_id, item_id, expire_date
+          ), usage AS (
+            SELECT
+              clinic_id,
+              customer_id,
+              item_id,
+              expire_date,
+              SUM(CASE WHEN status = 'RESERVED' THEN COALESCE(amount, 0::DECIMAL) ELSE 0::DECIMAL END) AS reserved,
+              SUM(CASE WHEN status = 'USED' THEN COALESCE(amount, 0::DECIMAL) ELSE 0::DECIMAL END) AS used,
+              BOOL_OR(amount IS NULL OR amount <= 0) AS non_positive
+            FROM customer_course_usage_log
+            WHERE status IN ('RESERVED', 'USED')
+            GROUP BY clinic_id, customer_id, item_id, expire_date
+          )
+          SELECT COUNT(*)::BIGINT AS count
+          FROM entitlement
+          FULL JOIN usage
+            ON usage.clinic_id = entitlement.clinic_id
+           AND usage.customer_id = entitlement.customer_id
+           AND usage.item_id = entitlement.item_id
+           AND usage.expire_date = entitlement.expire_date
+          WHERE entitlement.clinic_id IS NULL
+             OR entitlement.entitlement_count IS DISTINCT FROM 1
+             OR entitlement.non_positive
+             OR usage.non_positive
+             OR entitlement.purchased - COALESCE(usage.reserved, 0::DECIMAL)
+                  - COALESCE(usage.used, 0::DECIMAL) < 0
+        `,
+        );
         const missingFinalizationPermission = await tx.$queryRaw<CountRow[]>(
           Prisma.sql`
           SELECT CASE WHEN EXISTS (
@@ -1047,6 +1921,30 @@ async function main(): Promise<void> {
             required.number_kind,
             required.period_key
         `);
+        const courseVerificationEvidenceObjects = await tx.$queryRaw<
+          EvidenceObjectRow[]
+        >(Prisma.sql`
+          SELECT
+            verification.verification_id::TEXT,
+            signature_file.bucket_name AS signature_bucket_name,
+            signature_file.object_key AS signature_object_key,
+            verification.signature_bytes,
+            verification.signature_hash,
+            pdf_file.bucket_name AS pdf_bucket_name,
+            pdf_file.object_key AS pdf_object_key,
+            verification.pdf_bytes,
+            verification.pdf_hash
+          FROM opd_course_verification AS verification
+          INNER JOIN customer_file AS signature_file
+            ON signature_file.file_id = verification.signature_file_id
+           AND signature_file.clinic_id = verification.clinic_id
+           AND signature_file.branch_id = verification.branch_id
+          INNER JOIN customer_file AS pdf_file
+            ON pdf_file.file_id = verification.pdf_file_id
+           AND pdf_file.clinic_id = verification.clinic_id
+           AND pdf_file.branch_id = verification.branch_id
+          ORDER BY verification.verification_id
+        `);
 
         return {
           queueTickets: ticketCount,
@@ -1059,6 +1957,14 @@ async function main(): Promise<void> {
           orderReleaseItemRows: orderReleaseItemCount,
           orderPrescriptionLinkRows: orderPrescriptionLinkCount,
           orderSaleLinkRows: orderSaleLinkCount,
+          courseReservationRows: courseReservationCount,
+          courseReservationItemRows: courseReservationItemCount,
+          courseReservationComponentRows: courseReservationComponentCount,
+          courseReservationOperatorRows: courseReservationOperatorCount,
+          courseVerificationRows: courseVerificationCount,
+          courseVerificationComponentRows: courseVerificationComponentCount,
+          courseCompensationRequestRows: courseCompensationRequestCount,
+          courseCompensationComponentRows: courseCompensationComponentCount,
           draftSnapshotRows: draftSnapshotCount,
           draftImportRows: draftImportCount,
           draftImportSectionRows: draftImportSectionCount,
@@ -1103,6 +2009,21 @@ async function main(): Promise<void> {
           orderReleaseIntegrityMismatches: Number(
             orderReleaseIntegrityMismatches[0]?.count ?? 0n,
           ),
+          courseReservationIntegrityMismatches: Number(
+            courseReservationIntegrityMismatches[0]?.count ?? 0n,
+          ),
+          courseVerificationIntegrityMismatches: Number(
+            courseVerificationIntegrityMismatches[0]?.count ?? 0n,
+          ),
+          missingCourseVerificationPermissions: Number(
+            missingCourseVerificationPermissions[0]?.count ?? 0n,
+          ),
+          unexpectedCourseVerificationDefaultGrants: Number(
+            unexpectedCourseVerificationDefaultGrants[0]?.count ?? 0n,
+          ),
+          legacyCourseEntitlementAnomalies: Number(
+            legacyCourseEntitlementAnomalies[0]?.count ?? 0n,
+          ),
           draftSnapshotIntegrityMismatches: Number(
             draftSnapshotIntegrityMismatches[0]?.count ?? 0n,
           ),
@@ -1135,6 +2056,7 @@ async function main(): Promise<void> {
             nextValue: row.next_value?.toString() ?? null,
             requiredNextValue: row.required_next_value.toString(),
           })),
+          courseVerificationEvidenceObjects,
         };
       },
       {
@@ -1144,7 +2066,51 @@ async function main(): Promise<void> {
       },
     );
 
-    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    const storage = new StorageService();
+    let courseVerificationEvidenceObjectMismatches = 0;
+    for (const evidence of report.courseVerificationEvidenceObjects) {
+      const objects = [
+        {
+          bucketName: evidence.signature_bucket_name,
+          objectKey: evidence.signature_object_key,
+          expectedBytes: evidence.signature_bytes,
+          expectedHash: evidence.signature_hash,
+        },
+        {
+          bucketName: evidence.pdf_bucket_name,
+          objectKey: evidence.pdf_object_key,
+          expectedBytes: evidence.pdf_bytes,
+          expectedHash: evidence.pdf_hash,
+        },
+      ];
+      for (const object of objects) {
+        try {
+          const bytes = await storage.readObject({
+            bucketName: object.bucketName,
+            objectKey: object.objectKey,
+          });
+          const hash = createHash("sha256").update(bytes).digest("hex");
+          if (
+            bytes.length !== object.expectedBytes ||
+            hash !== object.expectedHash
+          ) {
+            courseVerificationEvidenceObjectMismatches += 1;
+          }
+        } catch {
+          courseVerificationEvidenceObjectMismatches += 1;
+        }
+      }
+    }
+    const {
+      courseVerificationEvidenceObjects: _privateEvidenceCoordinates,
+      ...databaseReport
+    } = report;
+    const finalReport = {
+      ...databaseReport,
+      courseVerificationEvidenceObjectMismatches,
+    };
+
+    process.stdout.write(`${JSON.stringify(finalReport, null, 2)}\n`);
     if (
       report.validLegacyPairsMissingTicket > 0 ||
       report.invalidDateLegacyPairs > 0 ||
@@ -1159,6 +2125,11 @@ async function main(): Promise<void> {
       report.intakeIntegrityMismatches > 0 ||
       report.orderIntegrityMismatches > 0 ||
       report.orderReleaseIntegrityMismatches > 0 ||
+      report.courseReservationIntegrityMismatches > 0 ||
+      report.courseVerificationIntegrityMismatches > 0 ||
+      report.missingCourseVerificationPermissions > 0 ||
+      report.unexpectedCourseVerificationDefaultGrants > 0 ||
+      courseVerificationEvidenceObjectMismatches > 0 ||
       report.draftSnapshotIntegrityMismatches > 0 ||
       report.draftImportIntegrityMismatches > 0 ||
       report.clinicalFinalizationIntegrityMismatches > 0 ||
