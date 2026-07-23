@@ -25,6 +25,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "opd:v2:verify": "node --env-file-if-exists=.env --import tsx scripts/verify-opd-v2-foundation.ts",
+    "opd:v2:bootstrap-manual": "node --env-file-if-exists=.env --import tsx scripts/bootstrap-opd-v2-manual.ts",
     "opd:v2:repair-fixture-tickets": "node --env-file-if-exists=.env --import tsx scripts/repair-opd-v2-fixture-tickets.ts",
     "audit": "pnpm audit --prod --audit-level=high",
     "verify": "pnpm audit --prod --audit-level=high && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm build"

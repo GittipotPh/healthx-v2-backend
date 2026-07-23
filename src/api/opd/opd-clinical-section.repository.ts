@@ -158,9 +158,6 @@ export class OpdClinicalSectionRepository {
           updated_at: now,
           associations: {
             create: item.associations.map((association, associationIndex) => ({
-              clinic_id: scope.clinicId,
-              branch_id: scope.branchId,
-              encounter_id: section.encounter_id,
               display_order: associationIndex + 1,
               code: this.nullableText(association.code),
               label: association.label.trim(),

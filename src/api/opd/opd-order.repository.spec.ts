@@ -1,7 +1,12 @@
 import { Test } from "@nestjs/testing";
-import { role_enum } from "@prisma/client";
+import { Prisma, role_enum } from "@prisma/client";
 import type { RequestScope } from "../../auth/auth.types";
 import { PrismaService } from "../../prisma.service";
+import {
+  OpdClinicalCatalogCategory,
+  OpdOrderSourceType,
+} from "./dto/opd-order.dto";
+import type { OpdCatalogRecord } from "./opd-order.mapper";
 import { OpdOrderRepository } from "./opd-order.repository";
 
 const SCOPE: RequestScope = {
@@ -13,6 +18,7 @@ const SCOPE: RequestScope = {
 };
 const ENCOUNTER_ID = "11111111-1111-4111-8111-111111111111";
 const ORDER_ID = "22222222-2222-4222-8222-222222222222";
+const NOW = new Date("2026-07-23T09:00:00.000Z");
 
 describe("OpdOrderRepository", () => {
   it("scopes order reads through encounter, clinic, and branch identity", async () => {
@@ -94,5 +100,78 @@ describe("OpdOrderRepository", () => {
         },
       }),
     );
+  });
+
+  it("lets the nested order-item relation derive medication tenant keys", async () => {
+    const create = jest
+      .fn()
+      .mockResolvedValue({ order_item_id: "order-item-1" });
+    const module = await Test.createTestingModule({
+      providers: [OpdOrderRepository, { provide: PrismaService, useValue: {} }],
+    }).compile();
+    const repository = module.get(OpdOrderRepository);
+    const source: OpdCatalogRecord = {
+      sourceType: OpdOrderSourceType.PRODUCT,
+      sourceId: "product-1",
+      sourceParentId: null,
+      code: "MED-001",
+      category: OpdClinicalCatalogCategory.MEDICINE,
+      name: "Medicine",
+      description: null,
+      unit: "tablet",
+      basePrice: new Prisma.Decimal(12),
+      effectivePrice: new Prisma.Decimal(12),
+      pricingSource: "BASE",
+      taxType: "NO_VAT",
+      stockQuantity: new Prisma.Decimal(20),
+      stockAlertAt: 5,
+      categoryName: "Medicine",
+      subCategoryName: "Oral",
+      maximumDiscount: null,
+      maximumDiscountUnit: null,
+      isGlobal: false,
+      updatedAt: NOW,
+    };
+
+    await repository.createItem(
+      ORDER_ID,
+      ENCOUNTER_ID,
+      1,
+      source,
+      new Prisma.Decimal(12),
+      {
+        expectedOrderVersion: 1,
+        sourceType: OpdOrderSourceType.PRODUCT,
+        sourceId: source.sourceId,
+        quantity: 2,
+        medicationInstruction: {
+          sigText: "Take one tablet daily",
+          dose: "10 mg",
+        },
+      },
+      new Prisma.Decimal(24),
+      SCOPE,
+      NOW,
+      {
+        opd_order_item: { create },
+      } as unknown as Prisma.TransactionClient,
+    );
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        clinic_id: SCOPE.clinicId,
+        branch_id: SCOPE.branchId,
+        encounter_id: ENCOUNTER_ID,
+        order_id: ORDER_ID,
+        medication_instruction: {
+          create: expect.not.objectContaining({
+            clinic_id: expect.anything(),
+            branch_id: expect.anything(),
+            encounter_id: expect.anything(),
+            order_id: expect.anything(),
+          }),
+        },
+      }),
+    });
   });
 });

@@ -227,10 +227,8 @@ export class OpdOrderRepository {
         ...(dto.medicationInstruction
           ? {
               medication_instruction: {
-                create: this.medicationInstructionData(
+                create: this.medicationInstructionContent(
                   dto.medicationInstruction,
-                  orderId,
-                  encounterId,
                   scope,
                   now,
                 ),
@@ -640,6 +638,16 @@ export class OpdOrderRepository {
       branch_id: scope.branchId,
       encounter_id: encounterId,
       order_id: orderId,
+      ...this.medicationInstructionContent(input, scope, now),
+    };
+  }
+
+  private medicationInstructionContent(
+    input: OpdMedicationInstructionInputDto,
+    scope: RequestScope,
+    now: Date,
+  ) {
+    return {
       dose: this.nullableText(input.dose),
       route: this.nullableText(input.route),
       frequency: this.nullableText(input.frequency),
