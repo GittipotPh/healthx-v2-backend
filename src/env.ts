@@ -19,13 +19,19 @@ export interface BackendEnv {
   STORAGE_PROVIDER: "minio" | "azure";
   STORAGE_BUCKET: string;
   STORAGE_PUBLIC_BASE_URL?: string;
+  STORAGE_AUTO_CREATE_CONTAINER: boolean;
+  STORAGE_READ_URL_TTL_SECONDS: number;
   S3_ENDPOINT?: string;
   S3_REGION?: string;
   S3_ACCESS_KEY_ID?: string;
   S3_SECRET_ACCESS_KEY?: string;
   S3_FORCE_PATH_STYLE: boolean;
-  AZURE_STORAGE_CONNECTION_STRING?: string;
+  AZURE_STORAGE_ACCOUNT_URL?: string;
   AZURE_BLOB_CONTAINER?: string;
+  AZURE_CLIENT_ID?: string;
+  AZURE_STORAGE_CONNECTION_STRING?: string;
+  AZURE_BLOB_CONNECTION?: string;
+  AZURE_STORAGE_ACCOUNT?: string;
   CUSTOMER_FILE_MAX_BYTES: number;
   CORS_ORIGINS?: string;
   AUTH_COOKIE_DOMAIN?: string;
@@ -38,6 +44,7 @@ export interface BackendEnv {
   OPD_V2_ENABLED: boolean;
   OPD_COURSE_RESERVATION_ENABLED: boolean;
   OPD_COURSE_VERIFICATION_ENABLED: boolean;
+  OPD_CHART_RASTER_AUTOSAVE_ENABLED: boolean;
 }
 
 const schema = Joi.object<BackendEnv>({
@@ -62,6 +69,16 @@ const schema = Joi.object<BackendEnv>({
   STORAGE_PROVIDER: Joi.string().valid("minio", "azure").default("minio"),
   STORAGE_BUCKET: Joi.string().min(3).default("healthx-local"),
   STORAGE_PUBLIC_BASE_URL: Joi.string().uri().optional(),
+  STORAGE_AUTO_CREATE_CONTAINER: Joi.when("STORAGE_PROVIDER", {
+    is: "azure",
+    then: Joi.boolean().valid(false).default(false),
+    otherwise: Joi.boolean().default(true),
+  }),
+  STORAGE_READ_URL_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(600)
+    .default(600),
   S3_ENDPOINT: Joi.when("STORAGE_PROVIDER", {
     is: "minio",
     then: Joi.string().uri().default("http://localhost:9000"),
@@ -83,16 +100,30 @@ const schema = Joi.object<BackendEnv>({
     otherwise: Joi.string().optional(),
   }),
   S3_FORCE_PATH_STYLE: Joi.boolean().default(true),
-  AZURE_STORAGE_CONNECTION_STRING: Joi.when("STORAGE_PROVIDER", {
+  AZURE_STORAGE_ACCOUNT_URL: Joi.when("STORAGE_PROVIDER", {
     is: "azure",
-    then: Joi.string().required(),
+    then: Joi.string()
+      .uri({ scheme: ["https"] })
+      .required(),
     otherwise: Joi.string().optional(),
   }),
   AZURE_BLOB_CONTAINER: Joi.when("STORAGE_PROVIDER", {
     is: "azure",
-    then: Joi.string().min(3).default("healthx-local"),
+    then: Joi.string()
+      .pattern(/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/)
+      .required(),
     otherwise: Joi.string().optional(),
   }),
+  AZURE_CLIENT_ID: Joi.when("STORAGE_PROVIDER", {
+    is: "azure",
+    then: Joi.string()
+      .guid({ version: ["uuidv4"] })
+      .required(),
+    otherwise: Joi.string().optional(),
+  }),
+  AZURE_STORAGE_CONNECTION_STRING: Joi.any().forbidden(),
+  AZURE_BLOB_CONNECTION: Joi.any().forbidden(),
+  AZURE_STORAGE_ACCOUNT: Joi.any().forbidden(),
   CUSTOMER_FILE_MAX_BYTES: Joi.number()
     .integer()
     .min(1)
@@ -143,6 +174,9 @@ const schema = Joi.object<BackendEnv>({
   // Phase 3D production kill switch. Verification, evidence creation, inventory
   // deduction, and compensation stay independently disabled by default.
   OPD_COURSE_VERIFICATION_ENABLED: Joi.boolean().default(false),
+  // Image-first Chart writes remain off in deployed environments until the
+  // storage/RBAC/synthetic Azure rehearsal is separately approved.
+  OPD_CHART_RASTER_AUTOSAVE_ENABLED: Joi.boolean().default(false),
 }).unknown(true);
 
 let cached: BackendEnv | undefined;

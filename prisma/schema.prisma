@@ -2339,6 +2339,7 @@ model opd_encounter {
   examinations           opd_examination[]
   diagnosis_section      opd_diagnosis_section?
   note_workspace         opd_note_workspace?
+  chart_documents        opd_chart_document[]
   orders                 opd_order[]
   course_reservations    opd_course_reservation[]
   draft_snapshots        opd_draft_snapshot[]       @relation("OpdDraftSnapshotSourceEncounter")
@@ -2764,6 +2765,106 @@ model opd_note_section {
   @@unique([note_section_id, clinic_id, branch_id, encounter_id], map: "opd_note_section_identity_uq")
   @@unique([note_workspace_id, section_code], map: "opd_note_section_workspace_code_uq")
   @@index([clinic_id, branch_id, encounter_id, section_code, status], map: "opd_note_section_encounter_idx")
+}
+
+// Phase 2H Chart root. The built-in template code/version is pinned when the
+// first draft is created; every changed save appends a full immutable revision.
+model opd_chart_document {
+  chart_document_id                 String               @id @default(uuid()) @db.Uuid
+  clinic_id                         String               @db.VarChar(50)
+  branch_id                         String               @db.VarChar(50)
+  encounter_id                      String               @db.Uuid
+  customer_id                       String               @db.VarChar(50)
+  template_code                     String               @db.VarChar(50)
+  template_version                  String               @db.VarChar(80)
+  template_name_snapshot            String               @db.VarChar(200)
+  status                            String               @default("DRAFT") @db.VarChar(20)
+  version                           Int                  @default(1)
+  current_revision_number           Int?
+  content_schema                    String               @default("opd-chart-raster-v1") @db.VarChar(50)
+  clinical_metadata                 Json                 @default(dbgenerated("'{\"location\":\"\",\"character\":\"\",\"size\":\"\",\"side\":\"\",\"doctorNote\":\"\"}'::jsonb"))
+  content_sha256                    String               @db.Char(64)
+  raster_sha256                     String               @db.Char(64)
+  raster_file_size_bytes            Int
+  last_client_mutation_id           String               @db.Uuid
+  draft_storage_provider            String?              @db.VarChar(20)
+  draft_storage_bucket              String?              @db.VarChar(200)
+  draft_storage_object_key          String?              @db.VarChar(700)
+  draft_storage_etag                String?              @db.VarChar(300)
+  finalization_id                   String?              @db.Uuid
+  finalization_idempotency_key_hash String?              @db.Char(64)
+  finalization_request_hash         String?              @db.Char(64)
+  finalized_by                      String?              @db.VarChar(50)
+  finalized_at                      DateTime?            @db.Timestamptz(6)
+  created_by                        String               @db.VarChar(50)
+  updated_by                        String               @db.VarChar(50)
+  created_at                        DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at                        DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
+  encounter                         opd_encounter        @relation(fields: [encounter_id, clinic_id, branch_id], references: [encounter_id, clinic_id, branch_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_chart_document_encounter_tenant_fkey")
+  revisions                         opd_chart_revision[]
+  artifacts                         opd_chart_artifact[]
+
+  @@unique([chart_document_id, clinic_id, branch_id, encounter_id], map: "opd_chart_document_identity_uq")
+  @@unique([encounter_id, clinic_id, branch_id, template_code], map: "opd_chart_document_encounter_template_uq")
+  @@unique([draft_storage_provider, draft_storage_bucket, draft_storage_object_key], map: "opd_chart_document_draft_object_uq")
+  @@index([clinic_id, branch_id, encounter_id, status], map: "opd_chart_document_encounter_idx")
+  @@index([clinic_id, branch_id, customer_id, updated_at(sort: Desc)], map: "opd_chart_document_customer_idx")
+}
+
+// Frozen migration-028 vector history. CAZ migration 029 writes no new rows
+// here; it remains intact so any unexpected retained vector data is visible.
+model opd_chart_revision {
+  chart_revision_id                 String               @id @default(uuid()) @db.Uuid
+  chart_document_id                 String               @db.Uuid
+  clinic_id                         String               @db.VarChar(50)
+  branch_id                         String               @db.VarChar(50)
+  encounter_id                      String               @db.Uuid
+  revision_number                   Int
+  status                            String               @db.VarChar(20)
+  content_schema                    String               @default("opd-chart-vector-v1") @db.VarChar(50)
+  vector_snapshot                   Json
+  clinical_metadata                 Json
+  content_sha256                    String               @db.Char(64)
+  finalization_idempotency_key_hash String?              @db.Char(64)
+  finalization_request_hash         String?              @db.Char(64)
+  created_by                        String               @db.VarChar(50)
+  created_at                        DateTime             @default(now()) @db.Timestamptz(6)
+  document                          opd_chart_document   @relation(fields: [chart_document_id, clinic_id, branch_id, encounter_id], references: [chart_document_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_chart_revision_document_identity_fkey")
+  artifacts                         opd_chart_artifact[]
+
+  @@unique([chart_revision_id, chart_document_id, clinic_id, branch_id, encounter_id], map: "opd_chart_revision_identity_uq")
+  @@unique([chart_document_id, revision_number], map: "opd_chart_revision_number_uq")
+  @@index([clinic_id, branch_id, encounter_id, chart_document_id, revision_number(sort: Desc)], map: "opd_chart_revision_current_idx")
+  @@index([content_sha256], map: "opd_chart_revision_content_hash_idx")
+}
+
+// Private immutable PNG/PDF artifacts for a FINAL raster Chart.
+model opd_chart_artifact {
+  chart_artifact_id    String              @id @default(uuid()) @db.Uuid
+  chart_revision_id    String?             @db.Uuid
+  chart_document_id    String              @db.Uuid
+  clinic_id            String              @db.VarChar(50)
+  branch_id            String              @db.VarChar(50)
+  encounter_id         String              @db.Uuid
+  finalization_id      String              @db.Uuid
+  source_draft_version Int
+  artifact_format      String              @db.VarChar(10)
+  storage_provider     String              @db.VarChar(20)
+  storage_bucket       String              @db.VarChar(200)
+  storage_object_key   String              @db.VarChar(700)
+  storage_etag         String              @db.VarChar(300)
+  mime_type            String              @db.VarChar(100)
+  file_size_bytes      Int
+  sha256               String              @db.Char(64)
+  created_at           DateTime            @default(now()) @db.Timestamptz(6)
+  revision             opd_chart_revision? @relation(fields: [chart_revision_id, chart_document_id, clinic_id, branch_id, encounter_id], references: [chart_revision_id, chart_document_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_chart_artifact_revision_identity_fkey")
+  document             opd_chart_document  @relation(fields: [chart_document_id, clinic_id, branch_id, encounter_id], references: [chart_document_id, clinic_id, branch_id, encounter_id], onDelete: Restrict, onUpdate: Cascade, map: "opd_chart_artifact_document_identity_fkey")
+
+  @@unique([chart_artifact_id, chart_document_id, clinic_id, branch_id, encounter_id], map: "opd_chart_artifact_identity_uq")
+  @@unique([chart_document_id, artifact_format], map: "opd_chart_artifact_document_format_uq")
+  @@unique([finalization_id, artifact_format], map: "opd_chart_artifact_finalization_format_uq")
+  @@unique([storage_provider, storage_bucket, storage_object_key], map: "opd_chart_artifact_object_uq")
+  @@index([clinic_id, branch_id, encounter_id, chart_document_id], map: "opd_chart_artifact_encounter_idx")
 }
 
 // Phase 3A creates one app-owned order per encounter. Phase 3B may transition

@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { ApiProperty } from "@nestjs/swagger";
 import { CustomersRepository } from "./customers.repository";
-import { CustomerOptionsView, CustomerView, toCustomerView } from "./customers.mapper";
+import {
+  CustomerOptionsView,
+  CustomerView,
+  toCustomerView,
+} from "./customers.mapper";
 import {
   CustomerAppointmentSummary,
   CustomerDocumentSummary,
@@ -24,8 +33,18 @@ import type { QueryCustomersDto } from "./dto/query-customers.dto";
 import type { CreateCustomerNoteDto } from "./dto/create-customer-note.dto";
 import type { UploadCustomerFileDto } from "./dto/upload-customer-file.dto";
 import type { RequestScope } from "../../auth/auth.types";
-import { StorageService } from "../../common/storage/storage.service";
+import {
+  StorageService,
+  type StorageProvider,
+} from "../../common/storage/storage.service";
 import { backendEnv } from "../../env";
+
+function requireStorageProvider(value: string): StorageProvider {
+  if (value === "minio" || value === "azure") {
+    return value;
+  }
+  throw new Error(`Unsupported customer file storage provider: ${value}`);
+}
 
 export class CustomerListResult {
   @ApiProperty({ type: [CustomerView] })
@@ -50,7 +69,10 @@ export class CustomersService {
     private readonly storageService: StorageService,
   ) {}
 
-  async list(query: QueryCustomersDto, scope: RequestScope): Promise<CustomerListResult> {
+  async list(
+    query: QueryCustomersDto,
+    scope: RequestScope,
+  ): Promise<CustomerListResult> {
     const result = await this.repository.findMany(query, scope);
     return {
       items: result.items.map(toCustomerView),
@@ -72,29 +94,48 @@ export class CustomersService {
     return toCustomerView(found);
   }
 
-  async profile(customerId: string, scope: RequestScope): Promise<CustomerProfileView> {
+  async profile(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<CustomerProfileView> {
     return toCustomerProfileView(await this.requireProfile(customerId, scope));
   }
 
-  async timeline(customerId: string, scope: RequestScope): Promise<CustomerTimelineItem[]> {
-    const row = requireRow(await this.repository.findTimelineSlice(customerId, scope));
+  async timeline(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<CustomerTimelineItem[]> {
+    const row = requireRow(
+      await this.repository.findTimelineSlice(customerId, scope),
+    );
     const [notes, files] = await Promise.all([
       this.repository.findNotes(customerId, scope),
       this.repository.findFiles(customerId, scope),
     ]);
-    return toTimelineItems({ ...row, customer_note: notes, customer_file: files });
+    return toTimelineItems({
+      ...row,
+      customer_note: notes,
+      customer_file: files,
+    });
   }
 
   async appointments(
     customerId: string,
     scope: RequestScope,
   ): Promise<CustomerAppointmentSummary[]> {
-    const row = requireRow(await this.repository.findAppointmentSlice(customerId, scope));
+    const row = requireRow(
+      await this.repository.findAppointmentSlice(customerId, scope),
+    );
     return toAppointmentSummaries(row);
   }
 
-  async financials(customerId: string, scope: RequestScope): Promise<CustomerFinancialsView> {
-    const row = requireRow(await this.repository.findFinancialSlice(customerId, scope));
+  async financials(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<CustomerFinancialsView> {
+    const row = requireRow(
+      await this.repository.findFinancialSlice(customerId, scope),
+    );
     return toFinancialsView(row);
   }
 
@@ -102,7 +143,9 @@ export class CustomersService {
     customerId: string,
     scope: RequestScope,
   ): Promise<CustomerDocumentSummary[]> {
-    const slice = requireRow(await this.repository.findDocumentSlice(customerId, scope));
+    const slice = requireRow(
+      await this.repository.findDocumentSlice(customerId, scope),
+    );
     const files = await this.repository.findFiles(customerId, scope);
     const row = { ...slice, customer_file: files };
     const documents = toDocumentSummaries(row);
@@ -113,6 +156,7 @@ export class CustomersService {
         readUrls.set(
           file.file_id,
           await this.storageService.getReadUrl({
+            provider: requireStorageProvider(file.storage_provider),
             bucketName: file.bucket_name,
             objectKey: file.object_key,
           }),
@@ -127,7 +171,10 @@ export class CustomersService {
     );
   }
 
-  async notes(customerId: string, scope: RequestScope): Promise<CustomerNoteView[]> {
+  async notes(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<CustomerNoteView[]> {
     await this.ensureCustomer(customerId, scope);
     const rows = await this.repository.findNotes(customerId, scope);
     return rows.map(toCustomerNoteView);
@@ -192,7 +239,10 @@ export class CustomersService {
       // The DB row is the source of truth — remove the just-uploaded blob so a
       // failed insert doesn't leave an orphaned object in storage.
       await this.storageService
-        .deleteObject({ bucketName: stored.bucketName, objectKey: stored.objectKey })
+        .deleteObject({
+          bucketName: stored.bucketName,
+          objectKey: stored.objectKey,
+        })
         .catch((cleanupError: unknown) =>
           this.logger.error({
             msg: "customer file upload compensation failed; orphaned blob left in storage",
@@ -204,13 +254,18 @@ export class CustomersService {
     }
 
     const readUrl = await this.storageService.getReadUrl({
+      provider: requireStorageProvider(created.storage_provider),
       bucketName: created.bucket_name,
       objectKey: created.object_key,
     });
     return toCustomerFileView(created, readUrl);
   }
 
-  async deleteFile(customerId: string, fileId: string, scope: RequestScope): Promise<CustomerFileView> {
+  async deleteFile(
+    customerId: string,
+    fileId: string,
+    scope: RequestScope,
+  ): Promise<CustomerFileView> {
     await this.ensureCustomer(customerId, scope);
     const file = await this.repository.findFile(customerId, fileId, scope);
     if (!file) {
@@ -222,6 +277,7 @@ export class CustomersService {
     await this.repository.markFileDeleted(fileId, scope);
     try {
       await this.storageService.deleteObject({
+        provider: requireStorageProvider(file.storage_provider),
         bucketName: file.bucket_name,
         objectKey: file.object_key,
       });
@@ -256,7 +312,10 @@ export class CustomersService {
     };
   }
 
-  private async ensureCustomer(customerId: string, scope: RequestScope): Promise<void> {
+  private async ensureCustomer(
+    customerId: string,
+    scope: RequestScope,
+  ): Promise<void> {
     if (!(await this.repository.existsInClinic(customerId, scope.clinicId))) {
       throw new NotFoundException("Customer not found");
     }

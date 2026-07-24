@@ -28,22 +28,39 @@ describe("env", () => {
     expect(env.STORAGE_PROVIDER).toBe("minio");
     expect(env.STORAGE_BUCKET).toBe("healthx-local");
     expect(env.S3_ENDPOINT).toBe("http://localhost:9000");
+    expect(env.STORAGE_AUTO_CREATE_CONTAINER).toBe(true);
+    expect(env.STORAGE_READ_URL_TTL_SECONDS).toBe(600);
   });
 
-  it("requires Azure storage connection details when Azure is selected", () => {
+  it("requires managed-identity Azure settings when Azure is selected", () => {
     expect(() =>
       validateEnv({ ...BASE_ENV, STORAGE_PROVIDER: "azure" }),
-    ).toThrow(/AZURE_STORAGE_CONNECTION_STRING/);
+    ).toThrow(/AZURE_STORAGE_ACCOUNT_URL/);
 
     const env = validateEnv({
       ...BASE_ENV,
       STORAGE_PROVIDER: "azure",
-      AZURE_STORAGE_CONNECTION_STRING:
-        "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=testkey;EndpointSuffix=core.windows.net",
+      AZURE_STORAGE_ACCOUNT_URL: "https://healthxv2dev.blob.core.windows.net",
       AZURE_BLOB_CONTAINER: "healthx-dev",
+      AZURE_CLIENT_ID: "0a737a07-f038-4c2f-bc17-1cf1c65590cc",
+      STORAGE_AUTO_CREATE_CONTAINER: "false",
     });
     expect(env.STORAGE_PROVIDER).toBe("azure");
     expect(env.AZURE_BLOB_CONTAINER).toBe("healthx-dev");
+    expect(env.STORAGE_AUTO_CREATE_CONTAINER).toBe(false);
+  });
+
+  it("rejects Shared Key Azure settings", () => {
+    expect(() =>
+      validateEnv({
+        ...BASE_ENV,
+        STORAGE_PROVIDER: "azure",
+        AZURE_STORAGE_ACCOUNT_URL: "https://healthxv2dev.blob.core.windows.net",
+        AZURE_BLOB_CONTAINER: "healthx-dev",
+        AZURE_CLIENT_ID: "0a737a07-f038-4c2f-bc17-1cf1c65590cc",
+        AZURE_STORAGE_CONNECTION_STRING: "AccountName=forbidden",
+      }),
+    ).toThrow(/AZURE_STORAGE_CONNECTION_STRING/);
   });
 
   it("requires explicit CORS origins in production", () => {
@@ -98,5 +115,6 @@ describe("env", () => {
     expect(validateEnv(BASE_ENV).OPD_V2_ENABLED).toBe(true);
     expect(validateEnv(BASE_ENV).OPD_COURSE_RESERVATION_ENABLED).toBe(false);
     expect(validateEnv(BASE_ENV).OPD_COURSE_VERIFICATION_ENABLED).toBe(false);
+    expect(validateEnv(BASE_ENV).OPD_CHART_RASTER_AUTOSAVE_ENABLED).toBe(false);
   });
 });

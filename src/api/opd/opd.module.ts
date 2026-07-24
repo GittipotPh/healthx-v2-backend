@@ -37,6 +37,10 @@ import { OpdCourseReservationService } from "./opd-course-reservation.service";
 import { OpdCourseVerificationController } from "./opd-course-verification.controller";
 import { OpdCourseVerificationRepository } from "./opd-course-verification.repository";
 import { OpdCourseVerificationService } from "./opd-course-verification.service";
+import { OpdChartController } from "./opd-chart.controller";
+import { OpdChartRepository } from "./opd-chart.repository";
+import { OpdChartService } from "./opd-chart.service";
+import { OpdChartRasterEnabledGuard } from "./opd-chart-raster-enabled.guard";
 
 @Module({
   imports: [AuditLogModule, QueueModule],
@@ -52,6 +56,7 @@ import { OpdCourseVerificationService } from "./opd-course-verification.service"
     OpdClinicalFinalizationController,
     OpdCourseReservationController,
     OpdCourseVerificationController,
+    OpdChartController,
   ],
   providers: [
     OpdService,
@@ -78,6 +83,9 @@ import { OpdCourseVerificationService } from "./opd-course-verification.service"
     OpdCourseReservationRepository,
     OpdCourseVerificationService,
     OpdCourseVerificationRepository,
+    OpdChartService,
+    OpdChartRepository,
+    OpdChartRasterEnabledGuard,
     OpdV2EnabledGuard,
   ],
   exports: [OpdService],

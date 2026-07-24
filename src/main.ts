@@ -17,6 +17,10 @@ async function bootstrap(): Promise<void> {
     // Buffer logs until the pino logger below takes over, so even bootstrap
     // lines come out as structured JSON.
     bufferLogs: true,
+    // Chart vector snapshots can legitimately exceed Express' 100 KiB default.
+    // Register explicit bounded parsers below; the Chart service applies a
+    // stricter canonical 2,000,000-byte limit after normalization.
+    bodyParser: false,
   });
   app.useLogger(app.get(Logger));
 
@@ -25,6 +29,8 @@ async function bootstrap(): Promise<void> {
   app.set("trust proxy", 1);
 
   app.setGlobalPrefix("api/v1");
+  app.useBodyParser("json", { limit: "2mb" });
+  app.useBodyParser("urlencoded", { limit: "100kb", extended: true });
   // Security headers (HSTS, no-sniff, frameguard, etc.). The API serves JSON only,
   // so the default CSP isn't needed and would only complicate non-HTML responses.
   app.use(helmet({ contentSecurityPolicy: false }));

@@ -1,6 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
-import { StorageService } from "../src/common/storage/storage.service";
+import {
+  StorageService,
+  type StorageProvider,
+} from "../src/common/storage/storage.service";
+import { hashOpdChartContent } from "../src/api/opd/opd-chart-content";
 import { PrismaService } from "../src/prisma.service";
 
 interface CountRow {
@@ -23,14 +27,50 @@ interface SequenceLagRow {
 
 interface EvidenceObjectRow {
   verification_id: string;
+  signature_storage_provider: string;
   signature_bucket_name: string;
   signature_object_key: string;
   signature_bytes: number;
   signature_hash: string;
+  pdf_storage_provider: string;
   pdf_bucket_name: string;
   pdf_object_key: string;
   pdf_bytes: number;
   pdf_hash: string;
+}
+
+interface ChartDocumentObjectRow {
+  chart_document_id: string;
+  status: string;
+  clinical_metadata: Prisma.JsonValue;
+  content_sha256: string;
+  raster_sha256: string;
+  raster_file_size_bytes: number;
+  draft_storage_provider: string | null;
+  draft_storage_bucket: string | null;
+  draft_storage_object_key: string | null;
+  draft_storage_etag: string | null;
+}
+
+interface ChartArtifactObjectRow {
+  chart_artifact_id: string;
+  artifact_format: string;
+  storage_provider: string;
+  storage_bucket: string;
+  storage_object_key: string;
+  storage_etag: string;
+  mime_type: string;
+  file_size_bytes: number;
+  sha256: string;
+}
+
+function requireStorageProvider(value: string): StorageProvider {
+  if (value === "minio" || value === "azure") {
+    return value;
+  }
+  throw new Error(
+    `Unsupported storage provider in reconciliation row: ${value}`,
+  );
 }
 
 async function main(): Promise<void> {
@@ -73,6 +113,9 @@ async function main(): Promise<void> {
           await tx.opd_draft_import_section.count();
         const clinicalFinalizationCount =
           await tx.opd_clinical_finalization.count();
+        const chartDocumentCount = await tx.opd_chart_document.count();
+        const chartRevisionCount = await tx.opd_chart_revision.count();
+        const chartArtifactCount = await tx.opd_chart_artifact.count();
         const candidateCounts = await tx.$queryRaw<BackfillCandidateCountRow[]>(
           Prisma.sql`
           WITH candidate AS (
@@ -962,6 +1005,156 @@ async function main(): Promise<void> {
                  AND audit.action = 'enter-dispensing-after-treatment'
              )
         `);
+        const chartIntegrityMismatches = await tx.$queryRaw<CountRow[]>(
+          Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS count
+          FROM (
+            SELECT 'document:' || document.chart_document_id::TEXT AS resource_id
+            FROM opd_chart_document AS document
+            LEFT JOIN opd_encounter AS encounter
+              ON encounter.encounter_id = document.encounter_id
+             AND encounter.clinic_id = document.clinic_id
+             AND encounter.branch_id = document.branch_id
+            LEFT JOIN LATERAL (
+              SELECT
+                COUNT(*)::INTEGER AS artifact_count,
+                COUNT(*) FILTER (
+                  WHERE artifact.artifact_format = 'PNG'
+                )::INTEGER AS png_count,
+                COUNT(*) FILTER (
+                  WHERE artifact.artifact_format = 'PDF'
+                )::INTEGER AS pdf_count,
+                COUNT(*) FILTER (
+                  WHERE artifact.finalization_id
+                          IS DISTINCT FROM document.finalization_id
+                     OR artifact.source_draft_version
+                          IS DISTINCT FROM document.version
+                )::INTEGER AS source_mismatch_count,
+                MAX(artifact.sha256) FILTER (
+                  WHERE artifact.artifact_format = 'PNG'
+                ) AS png_sha256
+              FROM opd_chart_artifact AS artifact
+              WHERE artifact.chart_document_id = document.chart_document_id
+                AND artifact.clinic_id = document.clinic_id
+                AND artifact.branch_id = document.branch_id
+                AND artifact.encounter_id = document.encounter_id
+            ) AS artifact_total ON TRUE
+            WHERE encounter.encounter_id IS NULL
+               OR encounter.customer_id IS DISTINCT FROM document.customer_id
+               OR document.template_code NOT IN (
+                 'male-face-front', 'male-face-left', 'male-face-right',
+                 'female-face-front', 'dental-map', 'body-front-back',
+                 'skin-lesion', 'surgery-marking'
+               )
+               OR document.template_version
+                    IS DISTINCT FROM 'healthx-chart-template-v1'
+               OR document.status NOT IN ('DRAFT', 'FINAL')
+               OR document.version < 1
+               OR document.current_revision_number IS NOT NULL
+               OR document.content_schema
+                    IS DISTINCT FROM 'opd-chart-raster-v1'
+               OR JSONB_TYPEOF(document.clinical_metadata)
+                    IS DISTINCT FROM 'object'
+               OR JSONB_TYPEOF(document.clinical_metadata -> 'location')
+                    IS DISTINCT FROM 'string'
+               OR JSONB_TYPEOF(document.clinical_metadata -> 'character')
+                    IS DISTINCT FROM 'string'
+               OR JSONB_TYPEOF(document.clinical_metadata -> 'size')
+                    IS DISTINCT FROM 'string'
+               OR JSONB_TYPEOF(document.clinical_metadata -> 'side')
+                    IS DISTINCT FROM 'string'
+               OR JSONB_TYPEOF(document.clinical_metadata -> 'doctorNote')
+                    IS DISTINCT FROM 'string'
+               OR LENGTH(document.clinical_metadata ->> 'location') > 2000
+               OR LENGTH(document.clinical_metadata ->> 'character') > 2000
+               OR LENGTH(document.clinical_metadata ->> 'size') > 2000
+               OR LENGTH(document.clinical_metadata ->> 'side') > 2000
+               OR LENGTH(document.clinical_metadata ->> 'doctorNote') > 4000
+               OR document.content_sha256 !~ '^[0-9a-f]{64}$'
+               OR document.raster_sha256 !~ '^[0-9a-f]{64}$'
+               OR document.raster_file_size_bytes < 1
+               OR EXISTS (
+                 SELECT 1
+                 FROM opd_chart_revision AS revision
+                 WHERE revision.chart_document_id = document.chart_document_id
+               )
+               OR (
+                 document.status = 'DRAFT'
+                 AND (
+                   document.draft_storage_provider NOT IN ('minio', 'azure')
+                   OR BTRIM(document.draft_storage_bucket) = ''
+                    OR BTRIM(document.draft_storage_object_key) = ''
+                    OR BTRIM(document.draft_storage_etag) = ''
+                    OR document.finalization_id IS NOT NULL
+                    OR document.finalization_idempotency_key_hash IS NOT NULL
+                    OR document.finalization_request_hash IS NOT NULL
+                   OR document.finalized_by IS NOT NULL
+                   OR document.finalized_at IS NOT NULL
+                   OR artifact_total.artifact_count <> 0
+                 )
+               )
+               OR (
+                 document.status = 'FINAL'
+                 AND (
+                   document.draft_storage_provider IS NOT NULL
+                   OR document.draft_storage_bucket IS NOT NULL
+                   OR document.draft_storage_object_key IS NOT NULL
+                   OR document.draft_storage_etag IS NOT NULL
+                   OR document.finalization_id IS NULL
+                   OR document.finalization_idempotency_key_hash !~ '^[0-9a-f]{64}$'
+                   OR document.finalization_request_hash !~ '^[0-9a-f]{64}$'
+                   OR document.finalized_by IS NULL
+                   OR document.finalized_at IS NULL
+                   OR artifact_total.artifact_count <> 2
+                   OR artifact_total.png_count <> 1
+                   OR artifact_total.pdf_count <> 1
+                   OR artifact_total.source_mismatch_count <> 0
+                   OR artifact_total.png_sha256
+                        IS DISTINCT FROM document.raster_sha256
+                 )
+               )
+
+            UNION ALL
+
+            SELECT 'legacy-revision:' || revision.chart_revision_id::TEXT
+              AS resource_id
+            FROM opd_chart_revision AS revision
+
+            UNION ALL
+
+            SELECT 'artifact:' || artifact.chart_artifact_id::TEXT
+              AS resource_id
+            FROM opd_chart_artifact AS artifact
+            LEFT JOIN opd_chart_document AS document
+              ON document.chart_document_id = artifact.chart_document_id
+             AND document.clinic_id = artifact.clinic_id
+             AND document.branch_id = artifact.branch_id
+             AND document.encounter_id = artifact.encounter_id
+            WHERE document.chart_document_id IS NULL
+               OR document.status IS DISTINCT FROM 'FINAL'
+               OR artifact.chart_revision_id IS NOT NULL
+               OR artifact.finalization_id
+                    IS DISTINCT FROM document.finalization_id
+               OR artifact.source_draft_version
+                    IS DISTINCT FROM document.version
+               OR artifact.artifact_format NOT IN ('PNG', 'PDF')
+               OR artifact.storage_provider NOT IN ('minio', 'azure')
+               OR BTRIM(artifact.storage_bucket) = ''
+               OR BTRIM(artifact.storage_object_key) = ''
+               OR BTRIM(artifact.storage_etag) = ''
+               OR artifact.file_size_bytes < 1
+               OR artifact.sha256 !~ '^[0-9a-f]{64}$'
+               OR (
+                 artifact.artifact_format = 'PNG'
+                 AND artifact.mime_type IS DISTINCT FROM 'image/png'
+               )
+               OR (
+                 artifact.artifact_format = 'PDF'
+                 AND artifact.mime_type IS DISTINCT FROM 'application/pdf'
+               )
+          ) AS mismatch
+        `,
+        );
         const courseReservationIntegrityMismatches = await tx.$queryRaw<
           CountRow[]
         >(Prisma.sql`
@@ -1926,10 +2119,12 @@ async function main(): Promise<void> {
         >(Prisma.sql`
           SELECT
             verification.verification_id::TEXT,
+            signature_file.storage_provider AS signature_storage_provider,
             signature_file.bucket_name AS signature_bucket_name,
             signature_file.object_key AS signature_object_key,
             verification.signature_bytes,
             verification.signature_hash,
+            pdf_file.storage_provider AS pdf_storage_provider,
             pdf_file.bucket_name AS pdf_bucket_name,
             pdf_file.object_key AS pdf_object_key,
             verification.pdf_bytes,
@@ -1944,6 +2139,39 @@ async function main(): Promise<void> {
            AND pdf_file.clinic_id = verification.clinic_id
            AND pdf_file.branch_id = verification.branch_id
           ORDER BY verification.verification_id
+        `);
+        const chartDocumentObjects = await tx.$queryRaw<
+          ChartDocumentObjectRow[]
+        >(Prisma.sql`
+          SELECT
+            chart_document_id::TEXT,
+            status,
+            clinical_metadata,
+            content_sha256,
+            raster_sha256,
+            raster_file_size_bytes,
+            draft_storage_provider,
+            draft_storage_bucket,
+            draft_storage_object_key,
+            draft_storage_etag
+          FROM opd_chart_document
+          ORDER BY chart_document_id
+        `);
+        const chartArtifactObjects = await tx.$queryRaw<
+          ChartArtifactObjectRow[]
+        >(Prisma.sql`
+          SELECT
+            chart_artifact_id::TEXT,
+            artifact_format,
+            storage_provider,
+            storage_bucket,
+            storage_object_key,
+            storage_etag,
+            mime_type,
+            file_size_bytes,
+            sha256
+          FROM opd_chart_artifact
+          ORDER BY chart_artifact_id
         `);
 
         return {
@@ -1969,6 +2197,9 @@ async function main(): Promise<void> {
           draftImportRows: draftImportCount,
           draftImportSectionRows: draftImportSectionCount,
           clinicalFinalizationRows: clinicalFinalizationCount,
+          chartDocumentRows: chartDocumentCount,
+          chartRevisionRows: chartRevisionCount,
+          chartArtifactRows: chartArtifactCount,
           validLegacyPairsMissingTicket: Number(
             candidateCounts[0]?.valid_missing ?? 0n,
           ),
@@ -2033,6 +2264,9 @@ async function main(): Promise<void> {
           clinicalFinalizationIntegrityMismatches: Number(
             clinicalFinalizationIntegrityMismatches[0]?.count ?? 0n,
           ),
+          chartIntegrityMismatches: Number(
+            chartIntegrityMismatches[0]?.count ?? 0n,
+          ),
           missingFinalizationPermission: Number(
             missingFinalizationPermission[0]?.count ?? 0n,
           ),
@@ -2057,6 +2291,8 @@ async function main(): Promise<void> {
             requiredNextValue: row.required_next_value.toString(),
           })),
           courseVerificationEvidenceObjects,
+          chartDocumentObjects,
+          chartArtifactObjects,
         };
       },
       {
@@ -2071,12 +2307,14 @@ async function main(): Promise<void> {
     for (const evidence of report.courseVerificationEvidenceObjects) {
       const objects = [
         {
+          provider: evidence.signature_storage_provider,
           bucketName: evidence.signature_bucket_name,
           objectKey: evidence.signature_object_key,
           expectedBytes: evidence.signature_bytes,
           expectedHash: evidence.signature_hash,
         },
         {
+          provider: evidence.pdf_storage_provider,
           bucketName: evidence.pdf_bucket_name,
           objectKey: evidence.pdf_object_key,
           expectedBytes: evidence.pdf_bytes,
@@ -2086,6 +2324,7 @@ async function main(): Promise<void> {
       for (const object of objects) {
         try {
           const bytes = await storage.readObject({
+            provider: requireStorageProvider(object.provider),
             bucketName: object.bucketName,
             objectKey: object.objectKey,
           });
@@ -2101,13 +2340,98 @@ async function main(): Promise<void> {
         }
       }
     }
+    let chartDocumentHashMismatches = 0;
+    let chartDraftObjectMismatches = 0;
+    for (const document of report.chartDocumentObjects) {
+      try {
+        const actualHash = hashOpdChartContent(
+          document.raster_sha256,
+          document.clinical_metadata,
+        );
+        if (actualHash !== document.content_sha256) {
+          chartDocumentHashMismatches += 1;
+        }
+      } catch {
+        chartDocumentHashMismatches += 1;
+      }
+      if (document.status !== "DRAFT") {
+        continue;
+      }
+      try {
+        if (
+          !document.draft_storage_provider ||
+          !document.draft_storage_bucket ||
+          !document.draft_storage_object_key ||
+          !document.draft_storage_etag
+        ) {
+          chartDraftObjectMismatches += 1;
+          continue;
+        }
+        const locator = {
+          provider: requireStorageProvider(document.draft_storage_provider),
+          bucketName: document.draft_storage_bucket,
+          objectKey: document.draft_storage_object_key,
+        };
+        const [bytes, properties] = await Promise.all([
+          storage.readObject(locator),
+          storage.inspectObject(locator),
+        ]);
+        const hash = createHash("sha256").update(bytes).digest("hex");
+        if (
+          bytes.length !== document.raster_file_size_bytes ||
+          properties.fileSize !== document.raster_file_size_bytes ||
+          hash !== document.raster_sha256 ||
+          properties.eTag !== document.draft_storage_etag ||
+          properties.mimeType !== "image/png"
+        ) {
+          chartDraftObjectMismatches += 1;
+        }
+      } catch {
+        chartDraftObjectMismatches += 1;
+      }
+    }
+    let chartArtifactObjectMismatches = 0;
+    for (const artifact of report.chartArtifactObjects) {
+      try {
+        const locator = {
+          provider: requireStorageProvider(artifact.storage_provider),
+          bucketName: artifact.storage_bucket,
+          objectKey: artifact.storage_object_key,
+        };
+        const [bytes, properties] = await Promise.all([
+          storage.readObject(locator),
+          storage.inspectObject(locator),
+        ]);
+        const hash = createHash("sha256").update(bytes).digest("hex");
+        if (
+          bytes.length !== artifact.file_size_bytes ||
+          properties.fileSize !== artifact.file_size_bytes ||
+          hash !== artifact.sha256 ||
+          properties.eTag !== artifact.storage_etag ||
+          properties.mimeType !== artifact.mime_type ||
+          (artifact.artifact_format === "PNG" &&
+            properties.mimeType !== "image/png") ||
+          (artifact.artifact_format === "PDF" &&
+            properties.mimeType !== "application/pdf")
+        ) {
+          chartArtifactObjectMismatches += 1;
+        }
+      } catch {
+        chartArtifactObjectMismatches += 1;
+      }
+    }
     const {
       courseVerificationEvidenceObjects: _privateEvidenceCoordinates,
+      chartDocumentObjects: _privateChartContent,
+      chartArtifactObjects: _privateChartObjectCoordinates,
       ...databaseReport
     } = report;
     const finalReport = {
       ...databaseReport,
       courseVerificationEvidenceObjectMismatches,
+      chartDocumentHashMismatches,
+      chartDraftObjectMismatches,
+      chartArtifactObjectMismatches,
     };
 
     process.stdout.write(`${JSON.stringify(finalReport, null, 2)}\n`);
@@ -2133,6 +2457,10 @@ async function main(): Promise<void> {
       report.draftSnapshotIntegrityMismatches > 0 ||
       report.draftImportIntegrityMismatches > 0 ||
       report.clinicalFinalizationIntegrityMismatches > 0 ||
+      report.chartIntegrityMismatches > 0 ||
+      chartDocumentHashMismatches > 0 ||
+      chartDraftObjectMismatches > 0 ||
+      chartArtifactObjectMismatches > 0 ||
       report.missingFinalizationPermission > 0 ||
       report.unexpectedFinalizationDefaultGrants > 0 ||
       report.unsafeLegacyOpdNumbers > 0 ||

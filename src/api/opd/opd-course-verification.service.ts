@@ -21,6 +21,7 @@ import {
 import type { Principal, RequestScope } from "../../auth/auth.types";
 import {
   StorageService,
+  type StorageProvider,
   type StoredObject,
 } from "../../common/storage/storage.service";
 import { backendEnv } from "../../env";
@@ -74,6 +75,13 @@ import {
   OpdCourseVerificationRepository,
   type StoredCourseVerificationEvidence,
 } from "./opd-course-verification.repository";
+
+function requireStorageProvider(value: string): StorageProvider {
+  if (value === "minio" || value === "azure") {
+    return value;
+  }
+  throw new Error(`Unsupported course evidence storage provider: ${value}`);
+}
 
 type DatabaseClient = Prisma.TransactionClient | PrismaService;
 type ReservationItem = OpdCourseReservationRecord["items"][number];
@@ -991,8 +999,12 @@ export class OpdCourseVerificationService {
         "The committed verification PDF metadata does not reconcile",
       );
     }
-    const expiresInSeconds = 15 * 60;
+    const expiresInSeconds = Math.min(
+      15 * 60,
+      backendEnv().STORAGE_READ_URL_TTL_SECONDS,
+    );
     const url = await this.storageService.getReadUrl({
+      provider: requireStorageProvider(file.storage_provider),
       bucketName: file.bucket_name,
       objectKey: file.object_key,
       expiresInSeconds,
@@ -2291,6 +2303,7 @@ export class OpdCourseVerificationService {
     expectedHash: string,
   ): Promise<void> {
     const stored = await this.storageService.readObject({
+      provider: object.provider,
       bucketName: object.bucketName,
       objectKey: object.objectKey,
     });
@@ -2315,6 +2328,7 @@ export class OpdCourseVerificationService {
   ): Promise<void> {
     try {
       await this.storageService.deleteObject({
+        provider: object.provider,
         bucketName: object.bucketName,
         objectKey: object.objectKey,
       });
